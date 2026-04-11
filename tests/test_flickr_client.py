@@ -53,6 +53,12 @@ class TestFlickrErrorCode:
         exc.code = 105  # type: ignore[attr-defined]
         assert _flickr_error_code(exc) == 105
 
+    def test_falls_back_to_string_when_code_attr_is_not_integer(self):
+        exc = flickrapi.exceptions.FlickrError("Error: 105: Service unavailable")
+        exc.code = "not-a-number"  # type: ignore[attr-defined]
+        # Should fall through to string parsing and return 105
+        assert _flickr_error_code(exc) == 105
+
     def test_returns_none_for_unparseable(self):
         exc = flickrapi.exceptions.FlickrError("not a structured error")
         assert _flickr_error_code(exc) is None

@@ -121,8 +121,6 @@ class FlickrClient:
                     time.sleep(delay)
                 else:
                     raise
-        # Should never reach here; the loop always raises on the last attempt.
-        raise RuntimeError("Unexpected exit from _call_with_retry")
 
     # ------------------------------------------------------------------
     # Authentication
