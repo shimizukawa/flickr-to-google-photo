@@ -6,6 +6,7 @@ EXIF fields written (JPEG only):
 - DateTimeOriginal
 - ImageDescription / XPTitle (title)
 - UserComment (description)
+- XPComment (comments)
 """
 
 from __future__ import annotations
@@ -85,6 +86,14 @@ def write_exif_metadata(image_path: Path, photo: "PhotoMetadata") -> Path:
             exif[piexif.ExifIFD.UserComment] = (
                 b"UNICODE\x00" + photo.description.encode("utf-16-le")
             )
+
+        # Comments → XPComment (UTF-16-LE, Windows-compatible, null-terminated)
+        if photo.comments:
+            comment_lines = [
+                f"[{c.author_name}]: {c.content}" for c in photo.comments
+            ]
+            comment_text = "\n".join(comment_lines)
+            zeroth[piexif.ImageIFD.XPComment] = comment_text.encode("utf-16-le") + b"\x00\x00"
 
         # GPS
         gps_ifd: dict = {}

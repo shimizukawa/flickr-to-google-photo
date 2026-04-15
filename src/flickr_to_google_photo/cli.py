@@ -6,6 +6,7 @@ Usage
   flickr-to-gphoto fetch-metadata   # Download all Flickr metadata to local JSON
   flickr-to-gphoto migrate          # Run the full migration (download → upload)
   flickr-to-gphoto migrate --delete # Also delete photos from Flickr after upload
+  flickr-to-gphoto organize-local   # Organize downloaded photos into album directories
   flickr-to-gphoto status           # Show migration progress summary
   flickr-to-gphoto list-photos      # List photos and their current status
 """
@@ -21,6 +22,7 @@ import click
 from .config import Config
 from .flickr_client import FlickrClient
 from .google_photo_client import GooglePhotoClient
+from .local_organizer import LocalOrganizer
 from .metadata import MetadataStore, MigrationStatus
 from .migrator import Migrator
 
@@ -154,6 +156,56 @@ def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None) 
 
     click.echo("Migration complete.")
     _print_summary(store)
+
+
+@cli.command("organize-local")
+@click.option(
+    "--dest",
+    "dest_dir",
+    default=None,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Destination directory for organized photos. Defaults to <DATA_DIR>/organized.",
+)
+@click.option(
+    "--copy",
+    "copy",
+    is_flag=True,
+    default=False,
+    help="Copy files instead of moving them (originals are preserved).",
+)
+@click.option(
+    "--photo-id",
+    default=None,
+    help="Organize a single photo by its Flickr ID instead of all photos.",
+)
+@click.pass_context
+def organize_local(ctx: click.Context, dest_dir: Path | None, copy: bool, photo_id: str | None) -> None:
+    """Organize downloaded photos into album-based local directories.
+
+    Each photo is placed under <dest>/<album_name>/.  Photos that belong to
+    multiple albums are copied into each album directory.  Photos with no
+    album go into an 'uncategorized' subdirectory.
+
+    Flickr comments are embedded into the photo's EXIF data (XPComment field)
+    in addition to the standard EXIF metadata.
+    """
+    config: Config = _get_config(ctx)
+    store = _make_store(config)
+
+    if dest_dir is None:
+        dest_dir = config.data_dir / "organized"
+
+    organizer = LocalOrganizer(store=store, dest_dir=dest_dir, copy=copy)
+
+    if photo_id:
+        click.echo(f"Organizing single photo: {photo_id}")
+        organizer.organize_one_by_id(photo_id)
+    else:
+        all_ids = store.all_ids()
+        click.echo(f"Organizing {len(all_ids)} photos into {dest_dir}…")
+        organizer.organize_all(all_ids)
+
+    click.echo("Done.")
 
 
 @cli.command("status")
