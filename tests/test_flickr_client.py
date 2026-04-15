@@ -10,6 +10,7 @@ import requests
 
 from flickr_to_google_photo.flickr_client import (
     FlickrClient,
+    _extract_original_dimensions,
     _flickr_error_code,
     _MAX_RETRIES,
     _RETRY_BASE_DELAY,
@@ -238,3 +239,83 @@ class TestApiMethodsUseRetry:
                 client.delete_photo("1")
 
         spy.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _extract_original_dimensions
+# ---------------------------------------------------------------------------
+
+class TestExtractOriginalDimensions:
+    def test_returns_original_size_dimensions(self):
+        sizes = [
+            {"label": "Small", "width": "320", "height": "240"},
+            {"label": "Original", "width": "3024", "height": "4032"},
+        ]
+        assert _extract_original_dimensions(sizes) == (3024, 4032)
+
+    def test_falls_back_to_highest_priority_available(self):
+        """When 'Original' is absent, should use the next in priority."""
+        sizes = [
+            {"label": "Medium", "width": "500", "height": "375"},
+            {"label": "Large 2048", "width": "2048", "height": "1536"},
+        ]
+        assert _extract_original_dimensions(sizes) == (2048, 1536)
+
+    def test_returns_none_none_for_empty_list(self):
+        assert _extract_original_dimensions([]) == (None, None)
+
+    def test_returns_none_none_when_dimensions_missing(self):
+        sizes = [{"label": "Original"}]  # no width/height keys
+        assert _extract_original_dimensions(sizes) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# build_photo_metadata includes dimensions
+# ---------------------------------------------------------------------------
+
+class TestBuildPhotoMetadataDimensions:
+    def _make_full_mock_client(self):
+        client = _make_client()
+        # Minimal info response
+        client._flickr.photos.getInfo.return_value = {  # type: ignore
+            "photo": {
+                "owner": {"nsid": "nsid", "realname": "Name", "username": "user"},
+                "title": {"_content": "Title"},
+                "description": {"_content": ""},
+                "dates": {"taken": "2023-06-15 10:00:00", "posted": "0", "lastupdate": "0"},
+                "tags": {"tag": []},
+                "urls": {"url": [{"_content": "https://flickr.com/x"}]},
+                "originalformat": "jpg",
+                "originalsecret": "abc",
+            }
+        }
+        client._flickr.photos.getAllContexts.return_value = {}  # type: ignore
+        client._flickr.photos.comments.getList.return_value = {  # type: ignore
+            "comments": {"comment": []}
+        }
+        return client
+
+    def test_dimensions_populated_from_sizes(self):
+        client = self._make_full_mock_client()
+        client._flickr.photos.getSizes.return_value = {  # type: ignore
+            "sizes": {
+                "size": [{"label": "Original", "width": "4000", "height": "3000"}]
+            }
+        }
+        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+            photo = client.build_photo_metadata("1")
+
+        assert photo.width == 4000
+        assert photo.height == 3000
+
+    def test_dimensions_none_when_sizes_empty(self):
+        client = self._make_full_mock_client()
+        client._flickr.photos.getSizes.return_value = {  # type: ignore
+            "sizes": {"size": []}
+        }
+        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+            photo = client.build_photo_metadata("1")
+
+        assert photo.width is None
+        assert photo.height is None
+

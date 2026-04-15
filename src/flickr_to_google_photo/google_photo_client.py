@@ -14,8 +14,8 @@ service.  New uploads are fully manageable.
 Scopes used:
 - https://www.googleapis.com/auth/photoslibrary.appendonly
   (upload, create albums, add items to albums)
-- https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata
-  (read back URLs/IDs of items we created)
+- https://www.googleapis.com/auth/photoslibrary.readonly
+  (read all library items, including smartphone uploads, for duplicate detection)
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
-    "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
+    "https://www.googleapis.com/auth/photoslibrary.readonly",
 ]
 _API_BASE = "https://photoslibrary.googleapis.com/v1"
 _UPLOAD_URL = "https://photoslibrary.googleapis.com/v1/uploads"
@@ -182,21 +182,37 @@ class GooglePhotoClient:
     # Duplicate detection
     # ------------------------------------------------------------------
 
-    def find_media_item_by_filename(
+    def find_duplicate_media_item(
         self,
         filename: str,
         date_taken: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> str | None:
         """
-        Search for an app-created media item whose filename matches `filename`.
+        Search the Google Photos library for an item that duplicates this photo.
 
-        If `date_taken` is provided (ISO-8601 style "YYYY-MM-DD …"), the search
-        is narrowed to that calendar day, which dramatically reduces the number
-        of items that need to be inspected.  When `date_taken` is None the
-        search is skipped entirely and None is returned, because listing the
-        full library without a date filter is prohibitively expensive.
+        The search is always narrowed to a single calendar day via ``date_taken``
+        to keep the number of API results small.  When ``date_taken`` is absent
+        the check is skipped entirely (full-library enumeration would be
+        prohibitively expensive).
 
-        Returns the media item ID string if a duplicate is found, else None.
+        Two matching strategies are attempted for every candidate item:
+
+        1. **Filename match** – the item's ``filename`` equals ``filename``.
+           Reliable for items previously uploaded by this app (the filename is
+           preserved from the original Flickr download).
+
+        2. **Dimension match** – the item's ``mediaMetadata.width`` and
+           ``mediaMetadata.height`` equal ``width`` and ``height``.
+           Reliable for smartphone uploads where the original photo was taken
+           with the same device; filenames differ but the pixel dimensions of
+           the original are identical.
+
+        The ``photoslibrary.readonly`` scope is required so that smartphone-
+        uploaded items (not created by this app) are visible.
+
+        Returns the media item ID string if a duplicate is found, else ``None``.
         """
         if not date_taken:
             return None
@@ -220,6 +236,8 @@ class GooglePhotoClient:
             },
         }
 
+        check_dimensions = width is not None and height is not None
+
         while True:
             resp = self._session.post(
                 f"{_API_BASE}/mediaItems:search",
@@ -231,13 +249,34 @@ class GooglePhotoClient:
             data = resp.json()
 
             for item in data.get("mediaItems", []):
+                item_id = item.get("id")
+
+                # Strategy 1: filename match
                 if item.get("filename") == filename:
                     logger.debug(
-                        "Found existing media item id=%s for filename=%s",
-                        item["id"],
+                        "Duplicate found by filename: id=%s filename=%s",
+                        item_id,
                         filename,
                     )
-                    return item["id"]
+                    return item_id
+
+                # Strategy 2: dimension match (for smartphone originals)
+                if check_dimensions:
+                    meta = item.get("mediaMetadata", {})
+                    try:
+                        item_w = int(meta.get("width", 0))
+                        item_h = int(meta.get("height", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if item_w == width and item_h == height:
+                        logger.debug(
+                            "Duplicate found by dimensions (%dx%d): id=%s filename=%s",
+                            width,
+                            height,
+                            item_id,
+                            item.get("filename"),
+                        )
+                        return item_id
 
             next_token = data.get("nextPageToken")
             if not next_token:

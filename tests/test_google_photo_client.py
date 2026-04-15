@@ -1,13 +1,12 @@
-"""Tests for GooglePhotoClient.find_media_item_by_filename."""
+"""Tests for GooglePhotoClient.find_duplicate_media_item."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-import responses as responses_lib
 
 from flickr_to_google_photo.google_photo_client import GooglePhotoClient
 
@@ -29,11 +28,11 @@ def _make_client(tmp_path: Path) -> GooglePhotoClient:
     return client
 
 
-class TestFindMediaItemByFilename:
+class TestFindDuplicateMediaItem:
     def test_returns_none_when_no_date_taken(self, tmp_path):
         """Should return None immediately when date_taken is not provided."""
         client = _make_client(tmp_path)
-        result = client.find_media_item_by_filename("photo.jpg", date_taken=None)
+        result = client.find_duplicate_media_item("photo.jpg", date_taken=None)
         assert result is None
         # Session should not have been called
         client._session.post.assert_not_called()
@@ -41,7 +40,7 @@ class TestFindMediaItemByFilename:
     def test_returns_none_for_unparseable_date(self, tmp_path):
         """Should return None when date_taken cannot be parsed."""
         client = _make_client(tmp_path)
-        result = client.find_media_item_by_filename("photo.jpg", date_taken="not-a-date")
+        result = client.find_duplicate_media_item("photo.jpg", date_taken="not-a-date")
         assert result is None
         client._session.post.assert_not_called()
 
@@ -51,8 +50,8 @@ class TestFindMediaItemByFilename:
 
         search_response = {
             "mediaItems": [
-                {"id": "item_aaa", "filename": "other.jpg"},
-                {"id": "item_bbb", "filename": "12345_o.jpg"},
+                {"id": "item_aaa", "filename": "other.jpg", "mediaMetadata": {}},
+                {"id": "item_bbb", "filename": "12345_o.jpg", "mediaMetadata": {}},
             ]
         }
         mock_resp = MagicMock()
@@ -60,16 +59,20 @@ class TestFindMediaItemByFilename:
         mock_resp.json.return_value = search_response
         client._session.post.return_value = mock_resp
 
-        result = client.find_media_item_by_filename("12345_o.jpg", date_taken="2023-06-15")
+        result = client.find_duplicate_media_item("12345_o.jpg", date_taken="2023-06-15")
         assert result == "item_bbb"
 
     def test_returns_none_when_no_match(self, tmp_path):
-        """Should return None when no item in the results matches the filename."""
+        """Should return None when no item matches by filename or dimensions."""
         client = _make_client(tmp_path)
 
         search_response = {
             "mediaItems": [
-                {"id": "item_aaa", "filename": "other.jpg"},
+                {
+                    "id": "item_aaa",
+                    "filename": "other.jpg",
+                    "mediaMetadata": {"width": "1920", "height": "1080"},
+                },
             ]
         }
         mock_resp = MagicMock()
@@ -77,7 +80,57 @@ class TestFindMediaItemByFilename:
         mock_resp.json.return_value = search_response
         client._session.post.return_value = mock_resp
 
-        result = client.find_media_item_by_filename("missing.jpg", date_taken="2023-06-15")
+        result = client.find_duplicate_media_item(
+            "missing.jpg", date_taken="2023-06-15", width=3024, height=4032
+        )
+        assert result is None
+
+    def test_returns_id_when_dimensions_match(self, tmp_path):
+        """Should return ID when filename differs but dimensions match (smartphone case)."""
+        client = _make_client(tmp_path)
+
+        search_response = {
+            "mediaItems": [
+                {
+                    "id": "item_smartphone",
+                    "filename": "IMG_1234.jpg",
+                    "mediaMetadata": {"width": "3024", "height": "4032"},
+                },
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = search_response
+        client._session.post.return_value = mock_resp
+
+        # Flickr filename is different, but dimensions match
+        result = client.find_duplicate_media_item(
+            "98765_abc_o.jpg", date_taken="2023-06-15", width=3024, height=4032
+        )
+        assert result == "item_smartphone"
+
+    def test_dimensions_not_checked_when_not_provided(self, tmp_path):
+        """Dimension matching is skipped when width/height are None."""
+        client = _make_client(tmp_path)
+
+        search_response = {
+            "mediaItems": [
+                {
+                    "id": "item_smartphone",
+                    "filename": "IMG_1234.jpg",
+                    "mediaMetadata": {"width": "3024", "height": "4032"},
+                },
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = search_response
+        client._session.post.return_value = mock_resp
+
+        # No dimensions provided → should not match by dimensions
+        result = client.find_duplicate_media_item(
+            "98765_abc_o.jpg", date_taken="2023-06-15"
+        )
         assert result is None
 
     def test_paginates_until_match_found(self, tmp_path):
@@ -85,11 +138,11 @@ class TestFindMediaItemByFilename:
         client = _make_client(tmp_path)
 
         page1 = {
-            "mediaItems": [{"id": "item_aaa", "filename": "other.jpg"}],
+            "mediaItems": [{"id": "item_aaa", "filename": "other.jpg", "mediaMetadata": {}}],
             "nextPageToken": "tok123",
         }
         page2 = {
-            "mediaItems": [{"id": "item_bbb", "filename": "target.jpg"}],
+            "mediaItems": [{"id": "item_bbb", "filename": "target.jpg", "mediaMetadata": {}}],
         }
 
         resp1 = MagicMock()
@@ -102,7 +155,7 @@ class TestFindMediaItemByFilename:
 
         client._session.post.side_effect = [resp1, resp2]
 
-        result = client.find_media_item_by_filename("target.jpg", date_taken="2023-06-15")
+        result = client.find_duplicate_media_item("target.jpg", date_taken="2023-06-15")
         assert result == "item_bbb"
         assert client._session.post.call_count == 2
 
@@ -120,7 +173,7 @@ class TestFindMediaItemByFilename:
         mock_resp.json.return_value = {}
         client._session.post.return_value = mock_resp
 
-        client.find_media_item_by_filename("photo.jpg", date_taken="2023-06-15 10:30:00")
+        client.find_duplicate_media_item("photo.jpg", date_taken="2023-06-15 10:30:00")
 
         _, kwargs = client._session.post.call_args
         body = json.loads(kwargs["data"])

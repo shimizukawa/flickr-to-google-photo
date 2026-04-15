@@ -178,10 +178,11 @@ class Migrator:
                 }
 
         # Check whether a matching item already exists in Google Photos before
-        # uploading.  This detects duplicates from previous runs whose local
-        # state was lost or reset, without expensive image-content comparison.
-        existing_id = self.gphoto.find_media_item_by_filename(
-            local_path.name, photo.date_taken
+        # uploading.  Two strategies are tried: filename match (for app-created
+        # items from a previous run) and dimension match (for smartphone originals
+        # of the same photo already in the library).
+        existing_id = self.gphoto.find_duplicate_media_item(
+            local_path.name, photo.date_taken, photo.width, photo.height
         )
         if existing_id:
             logger.info(

@@ -68,6 +68,9 @@ class PhotoMetadata:
     owner_nsid: str
     owner_realname: str
     owner_username: str
+    # Photo dimensions (pixels), populated from Flickr getSizes during metadata fetch
+    width: int | None = None
+    height: int | None = None
     # Populated after download
     local_path: str | None = None
     # Populated after Google Photos upload
