@@ -127,7 +127,7 @@ class TestWriteExifMetadata:
         xp_comment_raw = loaded["0th"].get(piexif.ImageIFD.XPComment)
         assert xp_comment_raw is not None
         # piexif returns XP fields as tuples of individual byte values
-        xp_comment = bytes(xp_comment_raw).decode("utf-16-le")
+        xp_comment = bytes(xp_comment_raw).decode("utf-16-le").rstrip("\x00")
         assert "Alice" in xp_comment
         assert "Great shot!" in xp_comment
         assert "Bob" in xp_comment
