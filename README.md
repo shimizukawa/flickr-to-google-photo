@@ -7,8 +7,10 @@ FlickrからGoogle Photosへ写真を移行するスクリプト / A script to m
 - Flickrのすべての写真（プライベート含む）のメタデータを取得
   - アルバム名・タイトル・説明・コメント・撮影日時・GPS情報・タグ
 - 写真をFlickrから最高解像度でダウンロード
-- ダウンロードした写真にEXIFメタデータ（GPS・撮影日時・タイトル）を書き込む
+- ダウンロードした写真にEXIFメタデータを書き込む
+  - GPS・撮影日時・タイトル・説明（UserComment）・コメント（XPComment）
 - Google Photosへアップロードし、アルバムに追加
+- ダウンロードした写真をアルバム単位のディレクトリに整理（ローカル保存用）
 - 移行状況・メタデータをローカルJSON（`data/photos/<id>.json`）に保存
 - 移行済みの写真をFlickrから削除（オプション）
 - 中断しても続きから再開可能（冪等性あり）
@@ -103,6 +105,27 @@ flickr-to-gphoto list-photos --filter-status error
 flickr-to-gphoto list-photos --filter-status pending
 ```
 
+### ローカル保存用の整理
+
+ダウンロード済みの写真をアルバム単位のディレクトリに移動し、コメントを含むEXIFメタデータを写真ファイルに書き込みます:
+
+```bash
+# 全写真を整理（data/organized/<アルバム名>/ に移動）
+flickr-to-gphoto organize-local
+
+# 保存先ディレクトリを指定
+flickr-to-gphoto organize-local --dest /path/to/photos
+
+# 移動ではなくコピー（元ファイルを保持）
+flickr-to-gphoto organize-local --copy
+
+# 特定の写真のみ整理
+flickr-to-gphoto organize-local --photo-id 12345678901
+```
+
+アルバムに属さない写真は `uncategorized/` サブディレクトリに配置されます。
+複数のアルバムに属する写真は最初のアルバムに移動され、残りのアルバムにはコピーされます。
+
 ### デバッグログ
 
 ```bash
@@ -116,6 +139,11 @@ data/
 ├── google_token.json          # Google OAuth token (自動生成)
 ├── downloads/                 # 一時ダウンロードディレクトリ
 │   └── <filename>.<ext>
+├── organized/                 # organize-local で整理された写真
+│   ├── <アルバム名>/
+│   │   └── <filename>.<ext>
+│   └── uncategorized/         # アルバム未設定の写真
+│       └── <filename>.<ext>
 └── photos/                    # 写真ごとのメタデータ
     └── <flickr_id>.json
 ```
