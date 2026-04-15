@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +177,74 @@ class GooglePhotoClient:
         media_item = item_result.get("mediaItem", {})
         logger.info("Created media item: id=%s url=%s", media_item.get("id"), media_item.get("productUrl"))
         return media_item
+
+    # ------------------------------------------------------------------
+    # Duplicate detection
+    # ------------------------------------------------------------------
+
+    def find_media_item_by_filename(
+        self,
+        filename: str,
+        date_taken: str | None = None,
+    ) -> str | None:
+        """
+        Search for an app-created media item whose filename matches `filename`.
+
+        If `date_taken` is provided (ISO-8601 style "YYYY-MM-DD …"), the search
+        is narrowed to that calendar day, which dramatically reduces the number
+        of items that need to be inspected.  When `date_taken` is None the
+        search is skipped entirely and None is returned, because listing the
+        full library without a date filter is prohibitively expensive.
+
+        Returns the media item ID string if a duplicate is found, else None.
+        """
+        if not date_taken:
+            return None
+
+        self._ensure_auth()
+        assert self._session is not None
+
+        # Parse just the date part (format may be "YYYY-MM-DD HH:MM:SS" or ISO-8601)
+        try:
+            dt = datetime.strptime(date_taken[:10], "%Y-%m-%d")
+        except ValueError:
+            logger.debug("Could not parse date_taken %r; skipping duplicate check.", date_taken)
+            return None
+
+        body: dict[str, Any] = {
+            "pageSize": 100,
+            "filters": {
+                "dateFilter": {
+                    "dates": [{"year": dt.year, "month": dt.month, "day": dt.day}]
+                }
+            },
+        }
+
+        while True:
+            resp = self._session.post(
+                f"{_API_BASE}/mediaItems:search",
+                headers={"Content-Type": "application/json"},
+                data=json.dumps(body),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data.get("mediaItems", []):
+                if item.get("filename") == filename:
+                    logger.debug(
+                        "Found existing media item id=%s for filename=%s",
+                        item["id"],
+                        filename,
+                    )
+                    return item["id"]
+
+            next_token = data.get("nextPageToken")
+            if not next_token:
+                break
+            body["pageToken"] = next_token
+
+        return None
 
     # ------------------------------------------------------------------
     # Albums

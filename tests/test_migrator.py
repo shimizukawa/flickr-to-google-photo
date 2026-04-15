@@ -58,6 +58,8 @@ def mock_gphoto():
         "productUrl": "https://photos.google.com/photo/abc",
     }
     gphoto.get_or_create_album.return_value = "google_album_id_1"
+    # Default: no duplicate found in Google Photos
+    gphoto.find_media_item_by_filename.return_value = None
     return gphoto
 
 
@@ -141,7 +143,39 @@ class TestMigrateAll:
         assert "Upload failed" in (photo.error_message or "")
 
 
-class TestDeleteFromFlickr:
+class TestUploadDuplicateSkip:
+    def test_skips_upload_when_duplicate_found(self, migrator, mock_gphoto):
+        """If find_media_item_by_filename returns an ID, upload should be skipped."""
+        mock_gphoto.find_media_item_by_filename.return_value = "existing_gphoto_id"
+        migrator.store.save(_make_photo("111"))
+
+        with patch("flickr_to_google_photo.migrator.write_exif_metadata"):
+            migrator.migrate_all(["111"])
+
+        # Upload should NOT have been called
+        mock_gphoto.upload_photo.assert_not_called()
+        mock_gphoto.create_media_item.assert_not_called()
+
+        photo = migrator.store.load("111")
+        assert photo.google_photo_id == "existing_gphoto_id"
+        assert photo.status == MigrationStatus.COMPLETED
+
+    def test_proceeds_with_upload_when_no_duplicate(self, migrator, mock_gphoto):
+        """If find_media_item_by_filename returns None, upload proceeds normally."""
+        mock_gphoto.find_media_item_by_filename.return_value = None
+        migrator.store.save(_make_photo("111"))
+
+        with patch("flickr_to_google_photo.migrator.write_exif_metadata"):
+            migrator.migrate_all(["111"])
+
+        mock_gphoto.upload_photo.assert_called_once()
+        mock_gphoto.create_media_item.assert_called_once()
+
+        photo = migrator.store.load("111")
+        assert photo.google_photo_id == "gphoto_id_abc"
+        assert photo.status == MigrationStatus.COMPLETED
+
+
     def test_deletes_when_flag_set(self, tmp_path, mock_flickr, mock_gphoto):
         store = MetadataStore(tmp_path)
         download_dir = tmp_path / "downloads"
