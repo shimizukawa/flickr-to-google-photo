@@ -13,7 +13,7 @@ from flickr_to_google_photo.exif_writer import (
     _to_rational,
     write_exif_metadata,
 )
-from flickr_to_google_photo.metadata import GpsInfo, PhotoMetadata
+from flickr_to_google_photo.metadata import GpsInfo, PhotoComment, PhotoMetadata
 
 
 def _make_photo(**kwargs) -> PhotoMetadata:
@@ -99,3 +99,36 @@ class TestWriteExifMetadata:
         photo = _make_photo(gps=None)
         result = write_exif_metadata(fake_jpg, photo)
         assert result == fake_jpg
+
+    def test_no_comments_no_crash(self, tmp_path):
+        fake_jpg = tmp_path / "image.jpg"
+        fake_jpg.write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
+        photo = _make_photo(comments=[])
+        result = write_exif_metadata(fake_jpg, photo)
+        assert result == fake_jpg
+
+    def test_comments_written_to_xpcomment(self, tmp_path):
+        import piexif
+        # Create a minimal valid JPEG that piexif can read and write
+        fake_jpg = tmp_path / "image.jpg"
+        soi = b"\xff\xd8"
+        app0 = b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        sos = b"\xff\xda"  # Start of Scan – piexif stops parsing segments here
+        fake_jpg.write_bytes(soi + app0 + sos)
+
+        comments = [
+            PhotoComment("user1", "Alice", "1000", "Great shot!"),
+            PhotoComment("user2", "Bob", "1001", "Love it."),
+        ]
+        photo = _make_photo(comments=comments)
+        write_exif_metadata(fake_jpg, photo)
+
+        loaded = piexif.load(str(fake_jpg))
+        xp_comment_raw = loaded["0th"].get(piexif.ImageIFD.XPComment)
+        assert xp_comment_raw is not None
+        # piexif returns XP fields as tuples of individual byte values
+        xp_comment = bytes(xp_comment_raw).decode("utf-16-le")
+        assert "Alice" in xp_comment
+        assert "Great shot!" in xp_comment
+        assert "Bob" in xp_comment
+        assert "Love it." in xp_comment
