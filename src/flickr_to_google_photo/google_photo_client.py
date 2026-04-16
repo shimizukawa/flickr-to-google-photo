@@ -69,6 +69,17 @@ class GooglePhotoClient:
 
         if self._token_file.exists():
             creds = Credentials.from_authorized_user_file(str(self._token_file), _SCOPES)
+            # If the cached token was issued for a different (smaller) set of scopes,
+            # the new scope (e.g. photoslibrary.readonly added in a later version) would
+            # cause 403 errors.  Force re-authorization in that case.
+            if creds and creds.scopes and not set(_SCOPES).issubset(creds.scopes):
+                logger.info(
+                    "Cached token scopes %s do not cover all required scopes %s; "
+                    "re-authorizing.",
+                    creds.scopes,
+                    _SCOPES,
+                )
+                creds = None
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
