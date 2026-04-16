@@ -44,6 +44,18 @@ class TestFindDuplicateMediaItem:
         assert result is None
         client._session.post.assert_not_called()
 
+    def test_returns_none_on_403(self, tmp_path):
+        """Should return None gracefully when the API returns 403 (readonly scope not available)."""
+        client = _make_client(tmp_path)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        client._session.post.return_value = mock_resp
+
+        result = client.find_duplicate_media_item("photo.jpg", date_taken="2023-06-15")
+        assert result is None
+        # raise_for_status should NOT have been called (we handled 403 ourselves)
+        mock_resp.raise_for_status.assert_not_called()
+
     def test_returns_id_when_filename_matches(self, tmp_path):
         """Should return media item ID when filename matches a search result."""
         client = _make_client(tmp_path)

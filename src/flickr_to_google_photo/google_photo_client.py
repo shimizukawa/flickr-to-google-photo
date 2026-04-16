@@ -266,6 +266,13 @@ class GooglePhotoClient:
                 data=json.dumps(body),
                 timeout=30,
             )
+            if resp.status_code == 403:
+                logger.warning(
+                    "Duplicate detection unavailable (403 Forbidden on mediaItems:search). "
+                    "The OAuth app may not have the photoslibrary.readonly scope approved. "
+                    "Skipping duplicate check and proceeding with upload."
+                )
+                return None
             resp.raise_for_status()
             data = resp.json()
 

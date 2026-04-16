@@ -123,8 +123,15 @@ def fetch_metadata(ctx: click.Context) -> None:
     default=None,
     help="Migrate a single photo by its Flickr ID instead of all photos.",
 )
+@click.option(
+    "--skip-fetch",
+    "skip_fetch",
+    is_flag=True,
+    default=False,
+    help="Skip fetching metadata from Flickr and use only locally cached metadata. Useful for debugging.",
+)
 @click.pass_context
-def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None) -> None:
+def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None, skip_fetch: bool) -> None:
     """Migrate photos from Flickr to Google Photos."""
     config: Config = _get_config(ctx)
 
@@ -148,6 +155,10 @@ def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None) 
     if photo_id:
         click.echo(f"Migrating single photo: {photo_id}")
         migrator.migrate_one_by_id(photo_id)
+    elif skip_fetch:
+        all_ids = store.all_ids()
+        click.echo(f"Skipping Flickr metadata fetch. Using {len(all_ids)} locally cached photos…")
+        migrator.migrate_all(all_ids)
     else:
         click.echo("Fetching metadata for all Flickr photos…")
         all_ids = migrator.fetch_all_metadata()
