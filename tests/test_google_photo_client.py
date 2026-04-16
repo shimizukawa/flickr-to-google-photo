@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flickr_to_google_photo.google_photo_client import GooglePhotoClient
+from flickr_to_google_photo.google_photo_client import GooglePhotoClient, _timestamps_match
 
 _API_BASE = "https://photoslibrary.googleapis.com/v1"
 
@@ -179,3 +179,130 @@ class TestFindDuplicateMediaItem:
         body = json.loads(kwargs["data"])
         date_filter = body["filters"]["dateFilter"]["dates"][0]
         assert date_filter == {"year": 2023, "month": 6, "day": 15}
+
+    def test_returns_id_when_timestamp_matches(self, tmp_path):
+        """Should return ID when minute:second of date_taken matches creationTime."""
+        client = _make_client(tmp_path)
+
+        search_response = {
+            "mediaItems": [
+                {
+                    "id": "item_ts_match",
+                    "filename": "IMG_1234.jpg",  # filename differs
+                    "mediaMetadata": {
+                        "width": "1920",
+                        "height": "1080",  # dimensions differ
+                        # UTC time: hour differs (timezone), but minute=30, second=45 matches
+                        "creationTime": "2023-06-15T01:30:45Z",
+                    },
+                },
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = search_response
+        client._session.post.return_value = mock_resp
+
+        # Flickr local time minute=30, second=45 → matches Google's 01:30:45 UTC
+        result = client.find_duplicate_media_item(
+            "98765_abc_o.jpg",
+            date_taken="2023-06-15 10:30:45",
+            width=3024,
+            height=4032,
+        )
+        assert result == "item_ts_match"
+
+    def test_timestamp_mismatch_does_not_match(self, tmp_path):
+        """Should not match by timestamp when seconds differ."""
+        client = _make_client(tmp_path)
+
+        search_response = {
+            "mediaItems": [
+                {
+                    "id": "item_ts_no_match",
+                    "filename": "IMG_1234.jpg",
+                    "mediaMetadata": {
+                        "width": "1920",
+                        "height": "1080",
+                        "creationTime": "2023-06-15T01:30:46Z",  # second=46, not 45
+                    },
+                },
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = search_response
+        client._session.post.return_value = mock_resp
+
+        result = client.find_duplicate_media_item(
+            "98765_abc_o.jpg",
+            date_taken="2023-06-15 10:30:45",
+        )
+        assert result is None
+
+    def test_timestamp_checked_before_dimensions(self, tmp_path):
+        """Timestamp match should be found even when dimensions also differ."""
+        client = _make_client(tmp_path)
+
+        search_response = {
+            "mediaItems": [
+                {
+                    "id": "item_only_ts",
+                    "filename": "OTHER.jpg",
+                    "mediaMetadata": {
+                        # Different dimensions — would NOT match by dimension alone
+                        "width": "1280",
+                        "height": "720",
+                        "creationTime": "2023-06-15T01:30:45Z",  # minute=30, second=45
+                    },
+                },
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = search_response
+        client._session.post.return_value = mock_resp
+
+        result = client.find_duplicate_media_item(
+            "flickr_name.jpg",
+            date_taken="2023-06-15 10:30:45",
+            width=3024,
+            height=4032,
+        )
+        assert result == "item_only_ts"
+
+
+class TestTimestampsMatch:
+    def test_matching_minute_and_second(self):
+        """Same minute and second regardless of hour (timezone offset)."""
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T01:30:45Z") is True
+
+    def test_different_minute(self):
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T01:31:45Z") is False
+
+    def test_different_second(self):
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T01:30:46Z") is False
+
+    def test_timezone_independence_jst(self):
+        """JST (UTC+9): Flickr hour=10, Google UTC hour=01 → same minute:second."""
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T01:30:45Z") is True
+
+    def test_timezone_independence_est(self):
+        """EST (UTC-5): Flickr hour=10, Google UTC hour=15 → same minute:second."""
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T15:30:45Z") is True
+
+    def test_none_flickr_date(self):
+        assert _timestamps_match(None, "2023-06-15T01:30:45Z") is False
+
+    def test_empty_google_time(self):
+        assert _timestamps_match("2023-06-15 10:30:45", "") is False
+
+    def test_invalid_flickr_date(self):
+        assert _timestamps_match("not-a-date", "2023-06-15T01:30:45Z") is False
+
+    def test_invalid_google_time(self):
+        assert _timestamps_match("2023-06-15 10:30:45", "not-a-time") is False
+
+    def test_iso8601_with_offset(self):
+        """Google may return non-Z offset format."""
+        assert _timestamps_match("2023-06-15 10:30:45", "2023-06-15T01:30:45+00:00") is True

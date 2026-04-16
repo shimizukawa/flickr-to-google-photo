@@ -197,20 +197,30 @@ class GooglePhotoClient:
         the check is skipped entirely (full-library enumeration would be
         prohibitively expensive).
 
-        Two matching strategies are attempted for every candidate item:
+        Three matching strategies are attempted for every candidate item:
 
         1. **Filename match** – the item's ``filename`` equals ``filename``.
            Reliable for items previously uploaded by this app (the filename is
            preserved from the original Flickr download).
 
-        2. **Dimension match** – the item's ``mediaMetadata.width`` and
-           ``mediaMetadata.height`` equal ``width`` and ``height``.
-           Reliable for smartphone uploads where the original photo was taken
-           with the same device; filenames differ but the pixel dimensions of
-           the original are identical.
+        2. **Timestamp match** – the item's ``mediaMetadata.creationTime``
+           minute and second components equal those of ``date_taken``.
+           Flickr stores ``date_taken`` in the photographer's local time while
+           Google Photos stores ``creationTime`` in UTC.  Because timezone
+           offsets are always a whole number of hours (ignoring the very few
+           fractional-hour regions), the *minute* and *second* components are
+           identical for the same photo regardless of timezone.  This gives
+           second-level precision without requiring timezone knowledge.
 
-        The ``photoslibrary.readonly`` scope is required so that smartphone-
-        uploaded items (not created by this app) are visible.
+        3. **Dimension match** – the item's ``mediaMetadata.width`` and
+           ``mediaMetadata.height`` equal ``width`` and ``height``.
+           Useful as a fallback when ``creationTime`` is absent, but note that
+           all photos taken with the same camera will share dimensions so this
+           strategy alone can produce false positives.
+
+        The ``photoslibrary.readonly`` scope is required so that items not
+        created by this app (e.g. smartphone uploads) are visible in search
+        results.
 
         Returns the media item ID string if a duplicate is found, else ``None``.
         """
@@ -250,6 +260,7 @@ class GooglePhotoClient:
 
             for item in data.get("mediaItems", []):
                 item_id = item.get("id")
+                meta = item.get("mediaMetadata", {})
 
                 # Strategy 1: filename match
                 if item.get("filename") == filename:
@@ -260,9 +271,19 @@ class GooglePhotoClient:
                     )
                     return item_id
 
-                # Strategy 2: dimension match (for smartphone originals)
+                # Strategy 2: timestamp match (minute:second, timezone-independent)
+                creation_time = meta.get("creationTime", "")
+                if creation_time and _timestamps_match(date_taken, creation_time):
+                    logger.debug(
+                        "Duplicate found by timestamp: id=%s filename=%s creationTime=%s",
+                        item_id,
+                        item.get("filename"),
+                        creation_time,
+                    )
+                    return item_id
+
+                # Strategy 3: dimension match (fallback for smartphone originals)
                 if check_dimensions:
-                    meta = item.get("mediaMetadata", {})
                     try:
                         item_w = int(meta.get("width", 0))
                         item_h = int(meta.get("height", 0))
@@ -375,3 +396,30 @@ _MIME_MAP = {
 
 def _mime_type_for(path: Path) -> str:
     return _MIME_MAP.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _timestamps_match(flickr_date_taken: str | None, google_creation_time: str) -> bool:
+    """
+    Compare Flickr and Google Photos timestamps at minute:second precision.
+
+    Flickr ``date_taken`` is stored in the photographer's local time
+    (``YYYY-MM-DD HH:MM:SS``).  Google Photos ``creationTime`` is RFC 3339 UTC
+    (e.g. ``2023-06-15T01:30:45Z``).  Because timezone offsets are always a
+    whole number of hours (ignoring the very few fractional-hour regions such
+    as IST +5:30), the *minute* and *second* components are identical for the
+    same photo regardless of which timezone the photographer was in.
+
+    Returns ``True`` only when both minute and second components match.
+    """
+    if not flickr_date_taken or not google_creation_time:
+        return False
+    try:
+        flickr_dt = datetime.strptime(flickr_date_taken[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    try:
+        # datetime.fromisoformat does not accept "Z" before Python 3.11
+        google_dt = datetime.fromisoformat(google_creation_time.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return flickr_dt.minute == google_dt.minute and flickr_dt.second == google_dt.second
