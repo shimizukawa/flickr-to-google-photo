@@ -406,7 +406,7 @@ def _timestamps_match(flickr_date_taken: str | None, google_creation_time: str) 
     (``YYYY-MM-DD HH:MM:SS``).  Google Photos ``creationTime`` is RFC 3339 UTC
     (e.g. ``2023-06-15T01:30:45Z``).  Because timezone offsets are always a
     whole number of hours (ignoring the very few fractional-hour regions such
-    as IST +5:30), the *minute* and *second* components are identical for the
+    as IST +05:30), the *minute* and *second* components are identical for the
     same photo regardless of which timezone the photographer was in.
 
     Returns ``True`` only when both minute and second components match.
