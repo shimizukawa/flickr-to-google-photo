@@ -58,8 +58,6 @@ def mock_gphoto():
         "productUrl": "https://photos.google.com/photo/abc",
     }
     gphoto.get_or_create_album.return_value = "google_album_id_1"
-    # Default: no duplicate found in Google Photos
-    gphoto.find_duplicate_media_item.return_value = None
     return gphoto
 
 
@@ -141,53 +139,6 @@ class TestMigrateAll:
         photo = migrator.store.load("111")
         assert photo.status == MigrationStatus.ERROR
         assert "Upload failed" in (photo.error_message or "")
-
-
-class TestUploadDuplicateSkip:
-    def test_skips_upload_when_duplicate_found(self, migrator, mock_gphoto):
-        """If find_duplicate_media_item returns an ID, upload should be skipped."""
-        mock_gphoto.find_duplicate_media_item.return_value = "existing_gphoto_id"
-        migrator.store.save(_make_photo("111"))
-
-        with patch("flickr_to_google_photo.migrator.write_exif_metadata"):
-            migrator.migrate_all(["111"])
-
-        # Upload should NOT have been called
-        mock_gphoto.upload_photo.assert_not_called()
-        mock_gphoto.create_media_item.assert_not_called()
-
-        photo = migrator.store.load("111")
-        assert photo.google_photo_id == "existing_gphoto_id"
-        assert photo.status == MigrationStatus.COMPLETED
-
-    def test_proceeds_with_upload_when_no_duplicate(self, migrator, mock_gphoto):
-        """If find_duplicate_media_item returns None, upload proceeds normally."""
-        mock_gphoto.find_duplicate_media_item.return_value = None
-        migrator.store.save(_make_photo("111"))
-
-        with patch("flickr_to_google_photo.migrator.write_exif_metadata"):
-            migrator.migrate_all(["111"])
-
-        mock_gphoto.upload_photo.assert_called_once()
-        mock_gphoto.create_media_item.assert_called_once()
-
-        photo = migrator.store.load("111")
-        assert photo.google_photo_id == "gphoto_id_abc"
-        assert photo.status == MigrationStatus.COMPLETED
-
-    def test_passes_dimensions_to_duplicate_check(self, migrator, mock_gphoto):
-        """find_duplicate_media_item must receive the photo's width and height."""
-        mock_gphoto.find_duplicate_media_item.return_value = None
-        migrator.store.save(_make_photo("111", width=3024, height=4032))
-
-        with patch("flickr_to_google_photo.migrator.write_exif_metadata"):
-            migrator.migrate_all(["111"])
-
-        args, kwargs = mock_gphoto.find_duplicate_media_item.call_args
-        # Positional or keyword: (filename, date_taken, width, height)
-        call_args = list(args) + list(kwargs.values())
-        assert 3024 in call_args
-        assert 4032 in call_args
 
 
 class TestDeleteFromFlickr:

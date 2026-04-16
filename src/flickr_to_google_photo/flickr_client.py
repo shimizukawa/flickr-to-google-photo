@@ -304,10 +304,6 @@ class FlickrClient:
             for c in raw_comments
         ]
 
-        # Dimensions (original resolution)
-        sizes = self.get_photo_sizes(photo_id)
-        width, height = _extract_original_dimensions(sizes)
-
         return PhotoMetadata(
             flickr_id=photo_id,
             flickr_url=flickr_url,
@@ -326,8 +322,6 @@ class FlickrClient:
             owner_nsid=owner.get("nsid", ""),
             owner_realname=owner.get("realname", ""),
             owner_username=owner.get("username", ""),
-            width=width,
-            height=height,
         )
 
     # ------------------------------------------------------------------
@@ -399,30 +393,3 @@ def _flickr_error_code(exc: flickrapi.exceptions.FlickrError) -> int | None:
         except (TypeError, ValueError):
             pass
     return None
-
-
-def _extract_original_dimensions(
-    sizes: list[dict[str, Any]],
-) -> tuple[int | None, int | None]:
-    """
-    Return (width, height) in pixels for the highest-resolution size entry.
-
-    Iterates through ``_SIZE_PRIORITY`` and returns the first match.
-    Returns ``(None, None)`` if no numeric dimensions can be found.
-    """
-    size_map = {s["label"]: s for s in sizes}
-    for label in _SIZE_PRIORITY:
-        if label in size_map:
-            s = size_map[label]
-            try:
-                return int(s["width"]), int(s["height"])
-            except (KeyError, TypeError, ValueError):
-                pass
-    # Fallback: try the last entry in the list
-    if sizes:
-        s = sizes[-1]
-        try:
-            return int(s["width"]), int(s["height"])
-        except (KeyError, TypeError, ValueError):
-            pass
-    return None, None
