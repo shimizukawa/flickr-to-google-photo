@@ -14,14 +14,15 @@ service.  New uploads are fully manageable.
 Scopes used:
 - https://www.googleapis.com/auth/photoslibrary.appendonly
   (upload, create albums, add items to albums)
-- https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata
-  (read back URLs/IDs of items we created)
+- https://www.googleapis.com/auth/photoslibrary.readonly
+  (read all library items, including smartphone uploads, for duplicate detection)
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
-    "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
+    "https://www.googleapis.com/auth/photoslibrary.readonly",
 ]
 _API_BASE = "https://photoslibrary.googleapis.com/v1"
 _UPLOAD_URL = "https://photoslibrary.googleapis.com/v1/uploads"
@@ -178,6 +179,134 @@ class GooglePhotoClient:
         return media_item
 
     # ------------------------------------------------------------------
+    # Duplicate detection
+    # ------------------------------------------------------------------
+
+    def find_duplicate_media_item(
+        self,
+        filename: str,
+        date_taken: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> str | None:
+        """
+        Search the Google Photos library for an item that duplicates this photo.
+
+        The search is always narrowed to a single calendar day via ``date_taken``
+        to keep the number of API results small.  When ``date_taken`` is absent
+        the check is skipped entirely (full-library enumeration would be
+        prohibitively expensive).
+
+        Three matching strategies are attempted for every candidate item:
+
+        1. **Filename match** – the item's ``filename`` equals ``filename``.
+           Reliable for items previously uploaded by this app (the filename is
+           preserved from the original Flickr download).
+
+        2. **Timestamp match** – the item's ``mediaMetadata.creationTime``
+           minute and second components equal those of ``date_taken``.
+           Flickr stores ``date_taken`` in the photographer's local time while
+           Google Photos stores ``creationTime`` in UTC.  Because timezone
+           offsets are always a whole number of hours (ignoring the very few
+           fractional-hour regions), the *minute* and *second* components are
+           identical for the same photo regardless of timezone.  This gives
+           second-level precision without requiring timezone knowledge.
+
+        3. **Dimension match** – the item's ``mediaMetadata.width`` and
+           ``mediaMetadata.height`` equal ``width`` and ``height``.
+           Useful as a fallback when ``creationTime`` is absent, but note that
+           all photos taken with the same camera will share dimensions so this
+           strategy alone can produce false positives.
+
+        The ``photoslibrary.readonly`` scope is required so that items not
+        created by this app (e.g. smartphone uploads) are visible in search
+        results.
+
+        Returns the media item ID string if a duplicate is found, else ``None``.
+        """
+        if not date_taken:
+            return None
+
+        self._ensure_auth()
+        assert self._session is not None
+
+        # Parse just the date part (format may be "YYYY-MM-DD HH:MM:SS" or ISO-8601)
+        try:
+            dt = datetime.strptime(date_taken[:10], "%Y-%m-%d")
+        except ValueError:
+            logger.debug("Could not parse date_taken %r; skipping duplicate check.", date_taken)
+            return None
+
+        body: dict[str, Any] = {
+            "pageSize": 100,
+            "filters": {
+                "dateFilter": {
+                    "dates": [{"year": dt.year, "month": dt.month, "day": dt.day}]
+                }
+            },
+        }
+
+        check_dimensions = width is not None and height is not None
+
+        while True:
+            resp = self._session.post(
+                f"{_API_BASE}/mediaItems:search",
+                headers={"Content-Type": "application/json"},
+                data=json.dumps(body),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data.get("mediaItems", []):
+                item_id = item.get("id")
+                meta = item.get("mediaMetadata", {})
+
+                # Strategy 1: filename match
+                if item.get("filename") == filename:
+                    logger.debug(
+                        "Duplicate found by filename: id=%s filename=%s",
+                        item_id,
+                        filename,
+                    )
+                    return item_id
+
+                # Strategy 2: timestamp match (minute:second, timezone-independent)
+                creation_time = meta.get("creationTime", "")
+                if creation_time and _timestamps_match(date_taken, creation_time):
+                    logger.debug(
+                        "Duplicate found by timestamp: id=%s filename=%s creationTime=%s",
+                        item_id,
+                        item.get("filename"),
+                        creation_time,
+                    )
+                    return item_id
+
+                # Strategy 3: dimension match (fallback for smartphone originals)
+                if check_dimensions:
+                    try:
+                        item_w = int(meta.get("width", 0))
+                        item_h = int(meta.get("height", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if item_w == width and item_h == height:
+                        logger.debug(
+                            "Duplicate found by dimensions (%dx%d): id=%s filename=%s",
+                            width,
+                            height,
+                            item_id,
+                            item.get("filename"),
+                        )
+                        return item_id
+
+            next_token = data.get("nextPageToken")
+            if not next_token:
+                break
+            body["pageToken"] = next_token
+
+        return None
+
+    # ------------------------------------------------------------------
     # Albums
     # ------------------------------------------------------------------
 
@@ -267,3 +396,30 @@ _MIME_MAP = {
 
 def _mime_type_for(path: Path) -> str:
     return _MIME_MAP.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _timestamps_match(flickr_date_taken: str | None, google_creation_time: str) -> bool:
+    """
+    Compare Flickr and Google Photos timestamps at minute:second precision.
+
+    Flickr ``date_taken`` is stored in the photographer's local time
+    (``YYYY-MM-DD HH:MM:SS``).  Google Photos ``creationTime`` is RFC 3339 UTC
+    (e.g. ``2023-06-15T01:30:45Z``).  Because timezone offsets are always a
+    whole number of hours (ignoring the very few fractional-hour regions such
+    as IST +05:30), the *minute* and *second* components are identical for the
+    same photo regardless of which timezone the photographer was in.
+
+    Returns ``True`` only when both minute and second components match.
+    """
+    if not flickr_date_taken or not google_creation_time:
+        return False
+    try:
+        flickr_dt = datetime.strptime(flickr_date_taken[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    try:
+        # datetime.fromisoformat does not accept "Z" before Python 3.11
+        google_dt = datetime.fromisoformat(google_creation_time.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return flickr_dt.minute == google_dt.minute and flickr_dt.second == google_dt.second

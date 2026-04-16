@@ -177,6 +177,24 @@ class Migrator:
                     "productUrl": photo.google_photo_url or "",
                 }
 
+        # Check whether a matching item already exists in Google Photos before
+        # uploading.  Two strategies are tried: filename match (for app-created
+        # items from a previous run) and dimension match (for smartphone originals
+        # of the same photo already in the library).
+        existing_id = self.gphoto.find_duplicate_media_item(
+            local_path.name, photo.date_taken, photo.width, photo.height
+        )
+        if existing_id:
+            logger.info(
+                "Photo %s already exists in Google Photos (id=%s), skipping upload.",
+                photo.flickr_id,
+                existing_id,
+            )
+            photo.google_photo_id = existing_id
+            photo.status = MigrationStatus.UPLOADED
+            self.store.save(photo)
+            return {"id": existing_id, "productUrl": ""}
+
         photo.status = MigrationStatus.UPLOADING
         self.store.save(photo)
 
