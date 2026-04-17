@@ -11,7 +11,7 @@ A summary index is also maintained at:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -94,6 +94,8 @@ class PhotoMetadata:
         gps_data = d.get("gps")
         d["gps"] = GpsInfo(**gps_data) if gps_data else None
         d["comments"] = [PhotoComment(**c) for c in d.get("comments", [])]
+        known = {f.name for f in fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         return cls(**d)
 
 
@@ -115,14 +117,14 @@ class MetadataStore:
     def save(self, photo: PhotoMetadata) -> None:
         """Persist a photo's metadata to disk."""
         path = self._path(photo.flickr_id)
-        path.write_text(json.dumps(photo.to_dict(), ensure_ascii=False, indent=2))
+        path.write_text(json.dumps(photo.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load(self, flickr_id: str) -> PhotoMetadata | None:
         """Load a photo's metadata from disk, or None if not found."""
         path = self._path(flickr_id)
         if not path.exists():
             return None
-        return PhotoMetadata.from_dict(json.loads(path.read_text()))
+        return PhotoMetadata.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def exists(self, flickr_id: str) -> bool:
         return self._path(flickr_id).exists()
