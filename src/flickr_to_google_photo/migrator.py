@@ -176,15 +176,22 @@ class Migrator:
         description = _build_description(photo)
         upload_token = self.gphoto.upload_photo(local_path, description=description)
 
-        # Create the media item (without album – we'll add to albums separately)
+        # Pass the first album directly to batchCreate to save one add_to_album call
+        first_album_id: str | None = None
+        if photo.albums:
+            first_album_id = self.gphoto.get_or_create_album(photo.albums[0])
+
         media_item = self.gphoto.create_media_item(
             upload_token=upload_token,
             filename=local_path.name,
             description=description,
+            album_id=first_album_id,
         )
 
         photo.google_photo_id = media_item.get("id")
         photo.google_photo_url = media_item.get("productUrl")
+        if first_album_id:
+            photo.google_album_ids = [first_album_id]
         photo.status = MigrationStatus.UPLOADED
         self.store.save(photo)
         return media_item
@@ -200,8 +207,15 @@ class Migrator:
         photo.status = MigrationStatus.ADDING_TO_ALBUM
         self.store.save(photo)
 
-        google_album_ids: list[str] = []
-        for album_title in photo.albums:
+        # If google_album_ids is already populated, the first album was added during
+        # create_media_item; only process remaining albums.
+        # If empty, all albums still need to be added (old upload path or retry).
+        already_added = set(photo.google_album_ids)
+        albums_to_add = (
+            photo.albums[1:] if already_added else photo.albums
+        )
+        google_album_ids: list[str] = list(already_added)
+        for album_title in albums_to_add:
             album_id = self.gphoto.get_or_create_album(album_title)
             self.gphoto.add_to_album(album_id, media_item_id)
             google_album_ids.append(album_id)
