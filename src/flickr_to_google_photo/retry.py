@@ -10,7 +10,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 8
+MAX_RETRIES = 16  # 累積最大24時間程度のリトライを行う
 BACKOFF_BASE = 2.0  # delay = BACKOFF_BASE ** attempt  (1s, 2s, 4s, …)
 
 _RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
