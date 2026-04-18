@@ -30,6 +30,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
+from .retry import http_request_with_backoff
+
 logger = logging.getLogger(__name__)
 
 _SCOPES = [
@@ -121,7 +123,9 @@ class GooglePhotoClient:
         with file_path.open("rb") as f:
             data = f.read()
 
-        resp = self._session.post(_UPLOAD_URL, headers=headers, data=data, timeout=300)
+        resp = http_request_with_backoff(
+            self._session.post, _UPLOAD_URL, headers=headers, data=data, timeout=300
+        )
         resp.raise_for_status()
         upload_token = resp.text
         logger.debug("Uploaded %s, token length=%d", file_path.name, len(upload_token))
@@ -154,7 +158,8 @@ class GooglePhotoClient:
         if album_id:
             body["albumId"] = album_id
 
-        resp = self._session.post(
+        resp = http_request_with_backoff(
+            self._session.post,
             f"{_API_BASE}/mediaItems:batchCreate",
             headers={"Content-Type": "application/json"},
             data=json.dumps(body),
@@ -187,7 +192,8 @@ class GooglePhotoClient:
         assert self._session is not None
 
         body = {"album": {"title": title}}
-        resp = self._session.post(
+        resp = http_request_with_backoff(
+            self._session.post,
             f"{_API_BASE}/albums",
             headers={"Content-Type": "application/json"},
             data=json.dumps(body),
@@ -214,7 +220,9 @@ class GooglePhotoClient:
             params: dict[str, Any] = {"pageSize": 50, "excludeNonAppCreatedData": True}
             if page_token:
                 params["pageToken"] = page_token
-            resp = self._session.get(f"{_API_BASE}/albums", params=params, timeout=30)
+            resp = http_request_with_backoff(
+                self._session.get, f"{_API_BASE}/albums", params=params, timeout=30
+            )
             resp.raise_for_status()
             data = resp.json()
             for album in data.get("albums", []):
@@ -234,7 +242,8 @@ class GooglePhotoClient:
         assert self._session is not None
 
         body = {"mediaItemIds": [media_item_id]}
-        resp = self._session.post(
+        resp = http_request_with_backoff(
+            self._session.post,
             f"{_API_BASE}/albums/{album_id}:batchAddMediaItems",
             headers={"Content-Type": "application/json"},
             data=json.dumps(body),

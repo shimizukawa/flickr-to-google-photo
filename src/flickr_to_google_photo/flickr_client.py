@@ -21,21 +21,15 @@ import flickrapi
 import requests
 
 from .metadata import GpsInfo, PhotoComment, PhotoMetadata
+from .retry import call_with_backoff
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Rate-limit retry settings
-# ---------------------------------------------------------------------------
 
 # Flickr API error codes that indicate a transient / rate-limit condition
 _RETRYABLE_FLICKR_ERROR_CODES = {
     105,  # Service currently unavailable
     10,   # Rate limit exceeded (observed in some Flickr responses)
 }
-
-_MAX_RETRIES = 5
-_RETRY_BASE_DELAY = 1.0  # seconds; actual delay = base * 2^attempt
 
 _T = TypeVar("_T")
 
@@ -80,47 +74,25 @@ class FlickrClient:
 
     def _call_with_retry(self, fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
         """
-        Invoke ``fn(*args, **kwargs)`` and retry with exponential back-off on
-        transient Flickr errors (e.g. code 105 – service unavailable) or HTTP 429.
-
-        A configurable inter-call delay (``request_delay``) is applied before
-        every call to reduce the risk of hitting the rate limit in the first place.
+        Invoke ``fn(*args, **kwargs)`` with exponential back-off on transient
+        Flickr errors (e.g. code 105 – service unavailable) or HTTP 429.
         """
-        for attempt in range(_MAX_RETRIES + 1):
-            if self._request_delay > 0:
-                time.sleep(self._request_delay)
-            try:
-                return fn(*args, **kwargs)
-            except flickrapi.exceptions.FlickrError as exc:
-                code = _flickr_error_code(exc)
-                if code in _RETRYABLE_FLICKR_ERROR_CODES and attempt < _MAX_RETRIES:
-                    delay = _RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        "Flickr API error %s on attempt %d/%d. Retrying in %.1fs…",
-                        code,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    time.sleep(delay)
-                else:
-                    raise
-            except requests.exceptions.HTTPError as exc:
-                if (
+        def _is_retryable(exc: Exception) -> bool:
+            if isinstance(exc, flickrapi.exceptions.FlickrError):
+                return _flickr_error_code(exc) in _RETRYABLE_FLICKR_ERROR_CODES
+            if isinstance(exc, requests.exceptions.HTTPError):
+                return (
                     exc.response is not None
                     and exc.response.status_code == 429
-                    and attempt < _MAX_RETRIES
-                ):
-                    delay = _RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        "HTTP 429 rate-limit on attempt %d/%d. Retrying in %.1fs…",
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    time.sleep(delay)
-                else:
-                    raise
+                )
+            return False
+
+        return call_with_backoff(
+            fn, *args,
+            is_retryable=_is_retryable,
+            request_delay=self._request_delay,
+            **kwargs,
+        )
 
     # ------------------------------------------------------------------
     # Authentication
