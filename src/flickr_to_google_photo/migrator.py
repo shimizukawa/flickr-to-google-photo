@@ -163,19 +163,12 @@ class Migrator:
         write_exif_metadata(local_path, photo)
 
     def _upload(self, local_path: Path, photo: PhotoMetadata) -> dict:
-        if photo.status in (
-            MigrationStatus.UPLOADED,
-            MigrationStatus.ADDING_TO_ALBUM,
-            MigrationStatus.COMPLETED,
-            MigrationStatus.DELETING_FROM_FLICKR,
-            MigrationStatus.DELETED_FROM_FLICKR,
-        ):
-            if photo.google_photo_id:
-                # Return a dict with the same shape as create_media_item's return value
-                return {
-                    "id": photo.google_photo_id,
-                    "productUrl": photo.google_photo_url or "",
-                }
+        # If already uploaded, skip regardless of current status
+        if photo.google_photo_id:
+            return {
+                "id": photo.google_photo_id,
+                "productUrl": photo.google_photo_url or "",
+            }
 
         photo.status = MigrationStatus.UPLOADING
         self.store.save(photo)
@@ -209,18 +202,10 @@ class Migrator:
 
         google_album_ids: list[str] = []
         for album_title in photo.albums:
-            try:
-                album_id = self.gphoto.get_or_create_album(album_title)
-                self.gphoto.add_to_album(album_id, media_item_id)
-                google_album_ids.append(album_id)
-                logger.debug("Added photo %s to album '%s'", photo.flickr_id, album_title)
-            except Exception as exc:
-                logger.warning(
-                    "Could not add photo %s to album '%s': %s",
-                    photo.flickr_id,
-                    album_title,
-                    exc,
-                )
+            album_id = self.gphoto.get_or_create_album(album_title)
+            self.gphoto.add_to_album(album_id, media_item_id)
+            google_album_ids.append(album_id)
+            logger.debug("Added photo %s to album '%s'", photo.flickr_id, album_title)
 
         photo.google_album_ids = google_album_ids
         photo.status = MigrationStatus.COMPLETED
