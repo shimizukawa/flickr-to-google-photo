@@ -54,6 +54,8 @@ class GooglePhotoClient:
         self._token_file = token_file
         self._credentials: Credentials | None = None
         self._session: requests.Session | None = None
+        # Cache of album title → album ID to avoid repeated listing
+        self._album_cache: dict[str, str] | None = None
 
     # ------------------------------------------------------------------
     # Authentication
@@ -208,13 +210,27 @@ class GooglePhotoClient:
         """
         Return the ID of an album with the given title, creating it if needed.
 
-        Note: Google Photos does not allow listing all albums created by other
-        apps, so we list only albums created by this application.
+        Album listing is fetched once and cached in memory for the lifetime of
+        this client instance to avoid repeated paginated API calls.
         """
         self._ensure_auth()
-        assert self._session is not None
 
-        # List app-created albums
+        if self._album_cache is None:
+            self._album_cache = self._fetch_all_albums()
+
+        if title in self._album_cache:
+            return self._album_cache[title]
+
+        # Not found → create and update cache
+        album = self.create_album(title)
+        album_id: str = album["id"]
+        self._album_cache[title] = album_id
+        return album_id
+
+    def _fetch_all_albums(self) -> dict[str, str]:
+        """Fetch all app-created albums and return a title→id mapping."""
+        assert self._session is not None
+        result: dict[str, str] = {}
         page_token: str | None = None
         while True:
             params: dict[str, Any] = {"pageSize": 50, "excludeNonAppCreatedData": True}
@@ -226,15 +242,12 @@ class GooglePhotoClient:
             resp.raise_for_status()
             data = resp.json()
             for album in data.get("albums", []):
-                if album.get("title") == title:
-                    return album["id"]
+                result[album["title"]] = album["id"]
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
-
-        # Not found → create
-        album = self.create_album(title)
-        return album["id"]
+        logger.info("Fetched %d existing albums from Google Photos.", len(result))
+        return result
 
     def add_to_album(self, album_id: str, media_item_id: str) -> None:
         """Add an already-created media item to an album."""
