@@ -12,7 +12,6 @@ EXIF fields written (JPEG only):
 from __future__ import annotations
 
 import logging
-import struct
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -70,7 +69,7 @@ def write_exif_metadata(image_path: Path, photo: "PhotoMetadata") -> Path:
         # plus ImageDescription (ASCII fallback for broader tool compatibility)
         if photo.title:
             zeroth[piexif.ImageIFD.XPTitle] = photo.title.encode("utf-16-le")
-            zeroth[piexif.ImageIFD.ImageDescription] = photo.title.encode("ascii", errors="replace")
+            zeroth[piexif.ImageIFD.ImageDescription] = photo.title.encode("utf-8", errors="replace")
 
         # Date taken → DateTimeOriginal
         if photo.date_taken:

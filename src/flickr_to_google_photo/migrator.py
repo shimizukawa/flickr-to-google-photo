@@ -148,6 +148,7 @@ class Migrator:
             raise RuntimeError(
                 f"Photo {photo.flickr_id} is not downloaded yet. Run `download` first."
             )
+        logger.info("Annotating photo %s with EXIF metadata.", photo.flickr_id)
         self._write_exif(Path(photo.local_path), photo)
 
     def upload_photo(self, photo: PhotoMetadata) -> None:
