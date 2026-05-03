@@ -79,13 +79,16 @@ def test_migrate_parses_new_option_names_and_dispatches_steps(monkeypatch, cli_c
 def test_migrate_rejects_old_option_names():
     runner = CliRunner()
 
-    result = runner.invoke(
+    skip_upload_result = runner.invoke(cli_module.cli, ["migrate", "--skip-migrate"])
+    album_id_result = runner.invoke(
         cli_module.cli,
-        ["migrate", "--skip-migrate", "--flickr-album-id", "album1"],
+        ["migrate", "--flickr-album-id", "album1"],
     )
 
-    assert result.exit_code != 0
-    assert "--skip-migrate" in result.output or "--flickr-album-id" in result.output
+    assert skip_upload_result.exit_code != 0
+    assert "No such option: --skip-migrate" in skip_upload_result.output
+    assert album_id_result.exit_code != 0
+    assert "No such option: --flickr-album-id" in album_id_result.output
 
 
 def test_fetch_metadata_supports_photo_and_album_selection(monkeypatch, cli_context):
