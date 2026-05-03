@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import flickrapi
 import pytest
@@ -11,9 +11,9 @@ import requests
 from flickr_to_google_photo.flickr_client import (
     FlickrClient,
     _flickr_error_code,
-    _MAX_RETRIES,
-    _RETRY_BASE_DELAY,
 )
+from flickr_to_google_photo.retry import MAX_RETRIES as _MAX_RETRIES
+from flickr_to_google_photo.retry import backoff_delay
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class TestCallWithRetrySuccess:
         client = _make_client()
         fn = MagicMock(return_value={"ok": True})
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             result = client._call_with_retry(fn, a=1)
 
         assert result == {"ok": True}
@@ -83,7 +83,7 @@ class TestCallWithRetrySuccess:
         client = _make_client(request_delay=0.3)
         fn = MagicMock(return_value="done")
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep") as mock_sleep:
+        with patch("flickr_to_google_photo.retry.time.sleep") as mock_sleep:
             client._call_with_retry(fn)
 
         # The inter-call delay must be the first sleep call.
@@ -93,7 +93,7 @@ class TestCallWithRetrySuccess:
         client = _make_client(request_delay=0.0)
         fn = MagicMock(return_value="ok")
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep") as mock_sleep:
+        with patch("flickr_to_google_photo.retry.time.sleep") as mock_sleep:
             client._call_with_retry(fn)
 
         # No sleep call at all (neither inter-call nor retry)
@@ -111,7 +111,7 @@ class TestCallWithRetryFlickrError:
         err = _flickr_error(error_code)
         fn = MagicMock(side_effect=[err, err, "success"])
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             result = client._call_with_retry(fn)
 
         assert result == "success"
@@ -122,7 +122,7 @@ class TestCallWithRetryFlickrError:
         err = _flickr_error(1)  # code 1 = unknown user, not retryable
         fn = MagicMock(side_effect=err)
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             with pytest.raises(flickrapi.exceptions.FlickrError):
                 client._call_with_retry(fn)
 
@@ -133,7 +133,7 @@ class TestCallWithRetryFlickrError:
         err = _flickr_error(105)
         fn = MagicMock(side_effect=err)
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             with pytest.raises(flickrapi.exceptions.FlickrError):
                 client._call_with_retry(fn)
 
@@ -146,13 +146,12 @@ class TestCallWithRetryFlickrError:
 
         sleep_calls = []
         with patch(
-            "flickr_to_google_photo.flickr_client.time.sleep",
+            "flickr_to_google_photo.retry.time.sleep",
             side_effect=lambda s: sleep_calls.append(s),
         ):
             client._call_with_retry(fn)
 
-        # Expect two retry delays: 1.0 * 2^0 = 1.0 and 1.0 * 2^1 = 2.0
-        assert sleep_calls == [_RETRY_BASE_DELAY * (2**0), _RETRY_BASE_DELAY * (2**1)]
+        assert sleep_calls == [backoff_delay(0), backoff_delay(1)]
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +170,7 @@ class TestCallWithRetryHttp429:
         err = self._make_429_error()
         fn = MagicMock(side_effect=[err, "success"])
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             result = client._call_with_retry(fn)
 
         assert result == "success"
@@ -184,7 +183,7 @@ class TestCallWithRetryHttp429:
         err = requests.exceptions.HTTPError(response=resp)
         fn = MagicMock(side_effect=err)
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             with pytest.raises(requests.exceptions.HTTPError):
                 client._call_with_retry(fn)
 
@@ -195,7 +194,7 @@ class TestCallWithRetryHttp429:
         err = self._make_429_error()
         fn = MagicMock(side_effect=err)
 
-        with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+        with patch("flickr_to_google_photo.retry.time.sleep"):
             with pytest.raises(requests.exceptions.HTTPError):
                 client._call_with_retry(fn)
 
@@ -214,7 +213,7 @@ class TestApiMethodsUseRetry:
         client._flickr.photos.getInfo.return_value = {"photo": {"id": "1"}}  # type: ignore
 
         with patch.object(client, "_call_with_retry", wraps=client._call_with_retry) as spy:
-            with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+            with patch("flickr_to_google_photo.retry.time.sleep"):
                 client.get_photo_info("1")
 
         spy.assert_called_once()
@@ -224,7 +223,7 @@ class TestApiMethodsUseRetry:
         client._flickr.photos.getSizes.return_value = {"sizes": {"size": []}}  # type: ignore
 
         with patch.object(client, "_call_with_retry", wraps=client._call_with_retry) as spy:
-            with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+            with patch("flickr_to_google_photo.retry.time.sleep"):
                 client.get_photo_sizes("1")
 
         spy.assert_called_once()
@@ -234,7 +233,29 @@ class TestApiMethodsUseRetry:
         client._flickr.photos.delete.return_value = {}  # type: ignore
 
         with patch.object(client, "_call_with_retry", wraps=client._call_with_retry) as spy:
-            with patch("flickr_to_google_photo.flickr_client.time.sleep"):
+            with patch("flickr_to_google_photo.retry.time.sleep"):
                 client.delete_photo("1")
 
         spy.assert_called_once()
+
+
+class TestDownloadPhoto:
+    def test_retries_on_429_and_downloads_file(self, tmp_path):
+        client = _make_client()
+        photo_id = "1"
+        url = "https://live.staticflickr.com/server/photo.jpg"
+        retry_response = MagicMock(status_code=429, headers={})
+        success_response = MagicMock(status_code=200, headers={})
+        success_response.iter_content.return_value = [b"chunk1", b"chunk2"]
+
+        with patch.object(client, "get_best_download_url", return_value=(url, "Original")):
+            with patch(
+                "flickr_to_google_photo.flickr_client.requests.get",
+                side_effect=[retry_response, success_response],
+            ) as mock_get:
+                with patch("flickr_to_google_photo.retry.time.sleep"):
+                    dest_path = client.download_photo(photo_id, tmp_path)
+
+        assert dest_path == tmp_path / "photo.jpg"
+        assert dest_path.read_bytes() == b"chunk1chunk2"
+        assert mock_get.call_count == 2
