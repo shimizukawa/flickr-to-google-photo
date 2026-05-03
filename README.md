@@ -76,6 +76,31 @@ Flickrから全写真のメタデータをローカルに保存します（ダ�
 
 ```bash
 flickr-to-gphoto fetch-metadata
+
+# 特定の写真のみメタデータを取得
+flickr-to-gphoto fetch-metadata --photo-id 12345678901
+
+# 特定のアルバムのみメタデータを取得（複数指定可）
+flickr-to-gphoto fetch-metadata --album-id 1234567890,2345678901
+```
+
+### 責務ごとの実行
+
+```bash
+# Flickrから写真をダウンロード
+flickr-to-gphoto download --album-id 1234567890
+
+# 必要に応じて先にメタデータを取り直してからダウンロード
+flickr-to-gphoto download --photo-id 12345678901 --fetch-metadata
+
+# ダウンロード済み写真にメタデータを書き込む
+flickr-to-gphoto annotate --album-id 1234567890
+
+# ダウンロード済み写真をGoogle Photosへアップロード
+flickr-to-gphoto upload --album-id 1234567890
+
+# Flickrから削除
+flickr-to-gphoto delete --album-id 1234567890
 ```
 
 ### 移行の実行
@@ -91,13 +116,13 @@ flickr-to-gphoto migrate --delete
 flickr-to-gphoto migrate --photo-id 12345678901
 
 # 特定のアルバムのみ移行（複数指定可）
-flickr-to-gphoto migrate --flickr-album-id 1234567890,2345678901
+flickr-to-gphoto migrate --album-id 1234567890,2345678901
 
 # 既存のローカルメタデータを使って再取得をスキップ
 flickr-to-gphoto migrate --skip-fetch
 
 # Google Photosへのアップロードをスキップし、ローカル保存後にFlickr側を削除
-flickr-to-gphoto migrate --skip-migrate --delete --flickr-album-id 1234567890
+flickr-to-gphoto migrate --skip-upload --delete --album-id 1234567890
 ```
 
 ### 進捗確認
