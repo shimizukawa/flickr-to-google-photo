@@ -20,7 +20,7 @@ import flickrapi
 import requests
 
 from .metadata import GpsInfo, PhotoComment, PhotoMetadata
-from .retry import call_with_backoff
+from .retry import call_with_backoff, http_request_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -338,8 +338,7 @@ class FlickrClient:
             return dest_path
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        response = requests.get(url, stream=True, timeout=60)
-        response.raise_for_status()
+        response = http_request_with_backoff(requests.get, url, stream=True, timeout=60)
         with dest_path.open("wb") as f:
             for chunk in response.iter_content(chunk_size=65536):
                 f.write(chunk)
