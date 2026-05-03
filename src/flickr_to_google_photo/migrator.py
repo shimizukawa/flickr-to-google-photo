@@ -124,7 +124,10 @@ class Migrator:
         photo = self.store.load(flickr_id)
         if photo is None:
             if self.skip_fetch:
-                raise RuntimeError(f"No cached metadata for {flickr_id}.")
+                raise RuntimeError(
+                    f"No cached metadata for {flickr_id}. "
+                    "Run without --skip-fetch first to fetch it from Flickr."
+                )
             logger.info("No cached metadata for %s; fetching from Flickr…", flickr_id)
             photo = self.flickr.build_photo_metadata(flickr_id)
             self.store.save(photo)
@@ -260,10 +263,11 @@ class Migrator:
     def _cached_photo_ids(self) -> list[str]:
         if not self.flickr_album_ids:
             return self.store.all_ids()
+        album_id_filter = set(self.flickr_album_ids)
         return [
             photo.flickr_id
             for photo in self.store.all_photos()
-            if set(photo.album_ids) & set(self.flickr_album_ids)
+            if set(photo.album_ids) & album_id_filter
         ]
 
     def _target_photo_ids(self) -> list[str]:
