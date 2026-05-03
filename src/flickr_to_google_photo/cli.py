@@ -202,7 +202,7 @@ def _selected_photo_ids(
     if fetch_metadata_first:
         return migrator.fetch_all_metadata()
 
-    return migrator._cached_photo_ids()
+    return migrator.cached_photo_ids()
 
 
 def _load_photo_or_raise(store: MetadataStore, photo_id: str):
@@ -215,34 +215,31 @@ def _load_photo_or_raise(store: MetadataStore, photo_id: str):
 def _download_photos(migrator: Migrator, photo_ids: list[str]) -> None:
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
-        migrator._download(photo)
+        migrator.download_photo(photo)
 
 
 def _annotate_photos(migrator: Migrator, photo_ids: list[str]) -> None:
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
-        if not photo.local_path or not Path(photo.local_path).exists():
-            raise click.ClickException(
-                f"Photo {photo_id} is not downloaded yet. Run `download` first."
-            )
-        migrator._write_exif(Path(photo.local_path), photo)
+        try:
+            migrator.annotate_photo(photo)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
 
 
 def _upload_photos(migrator: Migrator, photo_ids: list[str]) -> None:
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
-        if not photo.local_path or not Path(photo.local_path).exists():
-            raise click.ClickException(
-                f"Photo {photo_id} is not downloaded yet. Run `download` first."
-            )
-        media_item = migrator._upload(Path(photo.local_path), photo)
-        migrator._add_to_albums(media_item["id"], photo)
+        try:
+            migrator.upload_photo(photo)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
 
 
 def _delete_photos(migrator: Migrator, photo_ids: list[str]) -> None:
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
-        migrator._delete_from_flickr(photo)
+        migrator.delete_photo_from_flickr(photo)
 
 
 # ------------------------------------------------------------------

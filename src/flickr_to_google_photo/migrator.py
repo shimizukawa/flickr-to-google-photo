@@ -134,6 +134,35 @@ class Migrator:
             self.store.save(photo)
         self._migrate_one(photo)
 
+    def cached_photo_ids(self) -> list[str]:
+        """Return cached photo IDs, optionally filtered by configured album IDs."""
+        return self._cached_photo_ids()
+
+    def download_photo(self, photo: PhotoMetadata) -> Path:
+        """Download a single photo from Flickr if needed."""
+        return self._download(photo)
+
+    def annotate_photo(self, photo: PhotoMetadata) -> None:
+        """Write metadata into a downloaded local photo file."""
+        if not photo.local_path or not Path(photo.local_path).exists():
+            raise RuntimeError(
+                f"Photo {photo.flickr_id} is not downloaded yet. Run `download` first."
+            )
+        self._write_exif(Path(photo.local_path), photo)
+
+    def upload_photo(self, photo: PhotoMetadata) -> None:
+        """Upload a downloaded photo to Google Photos and add it to albums."""
+        if not photo.local_path or not Path(photo.local_path).exists():
+            raise RuntimeError(
+                f"Photo {photo.flickr_id} is not downloaded yet. Run `download` first."
+            )
+        media_item = self._upload(Path(photo.local_path), photo)
+        self._add_to_albums(media_item["id"], photo)
+
+    def delete_photo_from_flickr(self, photo: PhotoMetadata) -> None:
+        """Delete a single photo from Flickr and persist the updated status."""
+        self._delete_from_flickr(photo)
+
     # ------------------------------------------------------------------
     # Internal migration logic
     # ------------------------------------------------------------------
