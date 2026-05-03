@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import urllib.parse
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -173,6 +172,26 @@ class FlickrClient:
                 break
             page += 1
         logger.info("Found %d photos on Flickr.", len(ids))
+        return ids
+
+    def get_album_photo_ids(self, album_id: str) -> list[str]:
+        """Return all photo IDs in a Flickr album/photoset."""
+        ids: list[str] = []
+        page = 1
+        while True:
+            result = self._call_with_retry(
+                self.api.photosets.getPhotos,
+                photoset_id=album_id,
+                per_page=500,
+                page=page,
+            )
+            photoset = result["photoset"]
+            for photo in photoset["photo"]:
+                ids.append(photo["id"])
+            if page >= int(photoset["pages"]):
+                break
+            page += 1
+        logger.info("Found %d photos in Flickr album %s.", len(ids), album_id)
         return ids
 
     # ------------------------------------------------------------------

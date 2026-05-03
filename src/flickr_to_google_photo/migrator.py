@@ -23,7 +23,6 @@ re-processed from the last successfully recorded step.
 from __future__ import annotations
 
 import logging
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,12 +46,18 @@ class Migrator:
         store: MetadataStore,
         download_dir: Path,
         delete_from_flickr: bool = False,
+        flickr_album_ids: list[str] | None = None,
+        skip_fetch: bool = False,
+        skip_migrate: bool = False,
     ) -> None:
         self.flickr = flickr
         self.gphoto = gphoto
         self.store = store
         self.download_dir = download_dir
         self.delete_from_flickr = delete_from_flickr
+        self.flickr_album_ids = list(dict.fromkeys(flickr_album_ids or []))
+        self.skip_fetch = skip_fetch
+        self.skip_migrate = skip_migrate
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -66,7 +71,10 @@ class Migrator:
         Photos that are already stored locally are skipped.
         Returns the list of all photo IDs.
         """
-        photo_ids = self.flickr.get_all_photo_ids()
+        if self.skip_fetch:
+            return self._cached_photo_ids()
+
+        photo_ids = self._target_photo_ids()
         for pid in photo_ids:
             if self.store.exists(pid):
                 logger.debug("Metadata for %s already cached, skipping.", pid)
@@ -86,7 +94,7 @@ class Migrator:
         If `photo_ids` is None, processes all locally stored photos.
         """
         if photo_ids is None:
-            photo_ids = self.store.all_ids()
+            photo_ids = self._cached_photo_ids()
 
         total = len(photo_ids)
         logger.info("Starting migration of %d photos.", total)
@@ -97,9 +105,13 @@ class Migrator:
                 logger.warning("No metadata found for %s, skipping.", pid)
                 continue
 
-            if photo.status in (
-                MigrationStatus.COMPLETED,
-                MigrationStatus.DELETED_FROM_FLICKR,
+            if photo.status == MigrationStatus.DELETED_FROM_FLICKR:
+                logger.debug("[%d/%d] Photo %s already deleted, skipping.", idx, total, pid)
+                continue
+
+            if (
+                photo.status == MigrationStatus.COMPLETED
+                and not self.delete_from_flickr
             ):
                 logger.debug("[%d/%d] Photo %s already migrated, skipping.", idx, total, pid)
                 continue
@@ -111,6 +123,8 @@ class Migrator:
         """Migrate a single photo identified by its Flickr ID."""
         photo = self.store.load(flickr_id)
         if photo is None:
+            if self.skip_fetch:
+                raise RuntimeError(f"No cached metadata for {flickr_id}.")
             logger.info("No cached metadata for %s; fetching from Flickr…", flickr_id)
             photo = self.flickr.build_photo_metadata(flickr_id)
             self.store.save(photo)
@@ -122,6 +136,15 @@ class Migrator:
 
     def _migrate_one(self, photo: PhotoMetadata) -> None:
         try:
+            if self.skip_migrate:
+                if self.delete_from_flickr:
+                    self._delete_from_flickr(photo)
+                return
+
+            if photo.status == MigrationStatus.COMPLETED and self.delete_from_flickr:
+                self._delete_from_flickr(photo)
+                return
+
             local_path = self._download(photo)
             self._write_exif(local_path, photo)
             media_item = self._upload(local_path, photo)
@@ -233,6 +256,24 @@ class Migrator:
 
         photo.status = MigrationStatus.DELETED_FROM_FLICKR
         self.store.save(photo)
+
+    def _cached_photo_ids(self) -> list[str]:
+        if not self.flickr_album_ids:
+            return self.store.all_ids()
+        return [
+            photo.flickr_id
+            for photo in self.store.all_photos()
+            if set(photo.album_ids) & set(self.flickr_album_ids)
+        ]
+
+    def _target_photo_ids(self) -> list[str]:
+        if not self.flickr_album_ids:
+            return self.flickr.get_all_photo_ids()
+
+        photo_ids: list[str] = []
+        for album_id in self.flickr_album_ids:
+            photo_ids.extend(self.flickr.get_album_photo_ids(album_id))
+        return list(dict.fromkeys(photo_ids))
 
 
 # ------------------------------------------------------------------
