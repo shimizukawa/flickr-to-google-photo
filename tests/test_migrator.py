@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -87,6 +86,43 @@ class TestFetchAllMetadata:
         assert migrator.store.exists("111")
         assert migrator.store.exists("222")
 
+    def test_filters_by_album_ids(self, tmp_path, mock_flickr, mock_gphoto):
+        mock_flickr.get_album_photo_ids.side_effect = [["111", "222"], ["222", "333"]]
+        mock_flickr.build_photo_metadata.side_effect = lambda pid: _make_photo(pid)
+
+        migrator = Migrator(
+            flickr=mock_flickr,
+            gphoto=mock_gphoto,
+            store=MetadataStore(tmp_path),
+            download_dir=tmp_path / "downloads",
+            flickr_album_ids=["setid1", "setid2"],
+        )
+
+        ids = migrator.fetch_all_metadata()
+
+        assert ids == ["111", "222", "333"]
+        assert mock_flickr.get_album_photo_ids.call_args_list == [call("setid1"), call("setid2")]
+
+    def test_skip_fetch_uses_cached_album_metadata(self, tmp_path, mock_flickr, mock_gphoto):
+        store = MetadataStore(tmp_path)
+        store.save(_make_photo("111", album_ids=["setid1"]))
+        store.save(_make_photo("222", album_ids=["setid2"]))
+
+        migrator = Migrator(
+            flickr=mock_flickr,
+            gphoto=mock_gphoto,
+            store=store,
+            download_dir=tmp_path / "downloads",
+            flickr_album_ids=["setid1"],
+            skip_fetch=True,
+        )
+
+        ids = migrator.fetch_all_metadata()
+
+        assert ids == ["111"]
+        mock_flickr.get_all_photo_ids.assert_not_called()
+        mock_flickr.get_album_photo_ids.assert_not_called()
+
     def test_skips_existing(self, migrator, mock_flickr):
         # Pre-save photo "111"
         migrator.store.save(_make_photo("111"))
@@ -139,6 +175,87 @@ class TestMigrateAll:
         photo = migrator.store.load("111")
         assert photo.status == MigrationStatus.ERROR
         assert "Upload failed" in (photo.error_message or "")
+
+    def test_completed_photo_is_deleted_when_requested(self, tmp_path, mock_flickr, mock_gphoto):
+        store = MetadataStore(tmp_path)
+        store.save(
+            _make_photo(
+                "111",
+                status=MigrationStatus.COMPLETED,
+                google_photo_id="already-uploaded",
+            )
+        )
+
+        migrator = Migrator(
+            flickr=mock_flickr,
+            gphoto=mock_gphoto,
+            store=store,
+            download_dir=tmp_path / "downloads",
+            delete_from_flickr=True,
+        )
+
+        migrator.migrate_all(["111"])
+
+        photo = store.load("111")
+        assert photo is not None
+        assert photo.status == MigrationStatus.DELETED_FROM_FLICKR
+        mock_flickr.delete_photo.assert_called_once_with("111")
+        mock_gphoto.upload_photo.assert_not_called()
+
+    def test_skip_migrate_downloads_without_upload(self, tmp_path, mock_flickr, mock_gphoto):
+        store = MetadataStore(tmp_path)
+        download_dir = tmp_path / "downloads"
+        download_dir.mkdir()
+        store.save(_make_photo("111"))
+
+        migrator = Migrator(
+            flickr=mock_flickr,
+            gphoto=mock_gphoto,
+            store=store,
+            download_dir=download_dir,
+            skip_migrate=True,
+        )
+
+        with patch("flickr_to_google_photo.migrator.write_exif_metadata") as write_exif:
+            migrator.migrate_all(["111"])
+
+        photo = store.load("111")
+        assert photo is not None
+        assert photo.status == MigrationStatus.DOWNLOADED
+        assert photo.local_path == str(download_dir / "111.jpg")
+        mock_flickr.download_photo.assert_called_once_with("111", download_dir)
+        write_exif.assert_called_once_with(download_dir / "111.jpg", photo)
+        mock_gphoto.upload_photo.assert_not_called()
+        mock_flickr.delete_photo.assert_not_called()
+
+    def test_skip_migrate_with_delete_flag_deletes_after_download_without_upload(
+        self, tmp_path, mock_flickr, mock_gphoto
+    ):
+        store = MetadataStore(tmp_path)
+        download_dir = tmp_path / "downloads"
+        download_dir.mkdir()
+        store.save(_make_photo("111"))
+
+        migrator = Migrator(
+            flickr=mock_flickr,
+            gphoto=mock_gphoto,
+            store=store,
+            download_dir=download_dir,
+            delete_from_flickr=True,
+            skip_migrate=True,
+        )
+
+        with patch("flickr_to_google_photo.migrator.write_exif_metadata") as write_exif:
+            migrator.migrate_all(["111"])
+
+        photo = store.load("111")
+        assert photo is not None
+        assert photo.status == MigrationStatus.DELETED_FROM_FLICKR
+        assert photo.local_path == str(download_dir / "111.jpg")
+        mock_flickr.download_photo.assert_called_once_with("111", download_dir)
+        mock_flickr.delete_photo.assert_called_once_with("111")
+        write_exif.assert_called_once_with(download_dir / "111.jpg", photo)
+        mock_gphoto.upload_photo.assert_not_called()
 
 
 class TestDeleteFromFlickr:

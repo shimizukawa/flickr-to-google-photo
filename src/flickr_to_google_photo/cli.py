@@ -79,6 +79,18 @@ def _make_store(config: Config) -> MetadataStore:
     return MetadataStore(config.data_dir)
 
 
+def _parse_comma_separated_album_ids(
+    _ctx: click.Context, _param: click.Parameter, values: tuple[str, ...]
+) -> list[str]:
+    album_ids: list[str] = []
+    for value in values:
+        for album_id in value.split(","):
+            album_id = album_id.strip()
+            if album_id:
+                album_ids.append(album_id)
+    return album_ids
+
+
 # ------------------------------------------------------------------
 # Commands
 # ------------------------------------------------------------------
@@ -123,8 +135,34 @@ def fetch_metadata(ctx: click.Context) -> None:
     default=None,
     help="Migrate a single photo by its Flickr ID instead of all photos.",
 )
+@click.option(
+    "--flickr-album-id",
+    "flickr_album_ids",
+    multiple=True,
+    callback=_parse_comma_separated_album_ids,
+    help="Migrate only photos in the given Flickr album ID(s). Accepts comma-separated values.",
+)
+@click.option(
+    "--skip-fetch",
+    is_flag=True,
+    default=False,
+    help="Skip refetching Flickr metadata and use cached local metadata instead.",
+)
+@click.option(
+    "--skip-migrate",
+    is_flag=True,
+    default=False,
+    help="Skip Google Photos upload/albums after fetching metadata and saving local files.",
+)
 @click.pass_context
-def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None) -> None:
+def migrate(
+    ctx: click.Context,
+    delete_from_flickr: bool,
+    photo_id: str | None,
+    flickr_album_ids: list[str],
+    skip_fetch: bool,
+    skip_migrate: bool,
+) -> None:
     """Migrate photos from Flickr to Google Photos."""
     config: Config = _get_config(ctx)
 
@@ -143,6 +181,9 @@ def migrate(ctx: click.Context, delete_from_flickr: bool, photo_id: str | None) 
         store=store,
         download_dir=download_dir,
         delete_from_flickr=delete_from_flickr,
+        flickr_album_ids=flickr_album_ids,
+        skip_fetch=skip_fetch,
+        skip_migrate=skip_migrate,
     )
 
     if photo_id:
