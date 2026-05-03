@@ -140,6 +140,8 @@ class Migrator:
 
     def _migrate_one(self, photo: PhotoMetadata) -> None:
         try:
+            local_path = self._download(photo)
+            self._write_exif(local_path, photo)
             if self.skip_migrate:
                 if self.delete_from_flickr:
                     self._delete_from_flickr(photo)
@@ -149,8 +151,6 @@ class Migrator:
                 self._delete_from_flickr(photo)
                 return
 
-            local_path = self._download(photo)
-            self._write_exif(local_path, photo)
             media_item = self._upload(local_path, photo)
             self._add_to_albums(media_item["id"], photo)
             if self.delete_from_flickr:

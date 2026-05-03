@@ -152,7 +152,7 @@ def fetch_metadata(ctx: click.Context) -> None:
     "--skip-migrate",
     is_flag=True,
     default=False,
-    help="Skip migration and only operate on cached metadata (for example with --delete).",
+    help="Skip Google Photos upload/albums after fetching metadata and saving local files.",
 )
 @click.pass_context
 def migrate(

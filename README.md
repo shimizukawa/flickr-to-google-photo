@@ -96,7 +96,7 @@ flickr-to-gphoto migrate --flickr-album-id 1234567890,2345678901
 # 既存のローカルメタデータを使って再取得をスキップ
 flickr-to-gphoto migrate --skip-fetch
 
-# 移行処理をスキップしてFlickr側の削除だけを実行
+# Google Photosへのアップロードをスキップし、ローカル保存後にFlickr側を削除
 flickr-to-gphoto migrate --skip-migrate --delete --flickr-album-id 1234567890
 ```
 
