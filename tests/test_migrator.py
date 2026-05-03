@@ -202,7 +202,9 @@ class TestMigrateAll:
         mock_flickr.delete_photo.assert_called_once_with("111")
         mock_gphoto.upload_photo.assert_not_called()
 
-    def test_skip_migrate_deletes_without_upload(self, tmp_path, mock_flickr, mock_gphoto):
+    def test_skip_migrate_with_delete_flag_deletes_without_upload(
+        self, tmp_path, mock_flickr, mock_gphoto
+    ):
         store = MetadataStore(tmp_path)
         store.save(_make_photo("111"))
 
