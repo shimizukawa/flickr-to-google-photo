@@ -125,8 +125,8 @@ class Migrator:
         if photo is None:
             if self.skip_fetch:
                 raise RuntimeError(
-                    f"No cached metadata for {flickr_id}. "
-                    "Run without --skip-fetch first to fetch it from Flickr."
+                    f"No cached metadata found for {flickr_id}. "
+                    "Run `migrate` without --skip-fetch first to fetch metadata from Flickr."
                 )
             logger.info("No cached metadata for %s; fetching from Flickr…", flickr_id)
             photo = self.flickr.build_photo_metadata(flickr_id)

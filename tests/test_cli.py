@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from flickr_to_google_photo import cli as cli_module
 
 
-def test_migrate_accepts_album_and_skip_options(tmp_path, monkeypatch):
+def test_migrate_parses_album_ids_and_skip_flags_correctly(tmp_path, monkeypatch):
     config = SimpleNamespace(data_dir=tmp_path)
     flickr = MagicMock()
     gphoto = MagicMock()
