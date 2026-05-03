@@ -55,7 +55,7 @@ class Migrator:
         self.store = store
         self.download_dir = download_dir
         self.delete_from_flickr = delete_from_flickr
-        self.flickr_album_ids = list(dict.fromkeys(flickr_album_ids or []))
+        self.flickr_album_ids = _dedupe_preserving_order(flickr_album_ids or [])
         self.skip_fetch = skip_fetch
         self.skip_migrate = skip_migrate
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -277,7 +277,7 @@ class Migrator:
         photo_ids: list[str] = []
         for album_id in self.flickr_album_ids:
             photo_ids.extend(self.flickr.get_album_photo_ids(album_id))
-        return list(dict.fromkeys(photo_ids))
+        return _dedupe_preserving_order(photo_ids)
 
 
 # ------------------------------------------------------------------
@@ -301,3 +301,13 @@ def _build_description(photo: PhotoMetadata) -> str:
         ]
         parts.append("Comments:\n" + "\n".join(comment_lines))
     return "\n\n".join(parts)
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result

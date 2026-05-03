@@ -79,6 +79,18 @@ def _make_store(config: Config) -> MetadataStore:
     return MetadataStore(config.data_dir)
 
 
+def _parse_comma_separated_album_ids(
+    _ctx: click.Context, _param: click.Parameter, values: tuple[str, ...]
+) -> list[str]:
+    album_ids: list[str] = []
+    for value in values:
+        for album_id in value.split(","):
+            album_id = album_id.strip()
+            if album_id:
+                album_ids.append(album_id)
+    return album_ids
+
+
 # ------------------------------------------------------------------
 # Commands
 # ------------------------------------------------------------------
@@ -127,12 +139,7 @@ def fetch_metadata(ctx: click.Context) -> None:
     "--flickr-album-id",
     "flickr_album_ids",
     multiple=True,
-    callback=lambda _ctx, _param, values: [
-        album_id
-        for value in values
-        for album_id in (item.strip() for item in value.split(","))
-        if album_id
-    ],
+    callback=_parse_comma_separated_album_ids,
     help="Migrate only photos in the given Flickr album ID(s). Accepts comma-separated values.",
 )
 @click.option(
