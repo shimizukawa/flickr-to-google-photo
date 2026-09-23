@@ -28,7 +28,7 @@ from .config import Config
 from .flickr_client import FlickrClient
 from .google_photo_client import GooglePhotoClient
 from .local_organizer import LocalOrganizer
-from .metadata import MetadataStore, MigrationStatus
+from .metadata import MetadataStore, MigrationStatus, PhotoMetadata
 from .migrator import Migrator
 
 
@@ -206,17 +206,31 @@ def _selected_photo_ids(
     return migrator.cached_photo_ids()
 
 
-def _load_photo_or_raise(store: MetadataStore, photo_id: str):
+def _load_photo_or_raise(store: MetadataStore, photo_id: str) -> PhotoMetadata:
     photo = store.load(photo_id)
     if photo is None:
         raise click.ClickException(f"No cached metadata found for {photo_id}.")
     return photo
 
 
+def _record_step_error(migrator: Migrator, photo: PhotoMetadata, exc: Exception) -> None:
+    """Persist a per-photo failure without aborting the rest of the batch."""
+    logging.getLogger(__name__).error(
+        "Photo %s: step failed: %s", photo.flickr_id, exc
+    )
+    photo.status = MigrationStatus.ERROR
+    photo.error_message = str(exc)
+    migrator.store.save(photo)
+    click.echo(f"Photo {photo.flickr_id}: {exc}", err=True)
+
+
 def _download_photos(migrator: Migrator, photo_ids: list[str]) -> None:
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
-        migrator.download_photo(photo)
+        try:
+            migrator.download_photo(photo)
+        except Exception as exc:  # noqa: BLE001 - isolate failures per photo
+            _record_step_error(migrator, photo, exc)
 
 
 def _annotate_photos(migrator: Migrator, photo_ids: list[str]) -> None:
@@ -224,8 +238,8 @@ def _annotate_photos(migrator: Migrator, photo_ids: list[str]) -> None:
         photo = _load_photo_or_raise(migrator.store, photo_id)
         try:
             migrator.annotate_photo(photo)
-        except RuntimeError as exc:
-            raise click.ClickException(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - isolate failures per photo
+            _record_step_error(migrator, photo, exc)
 
 
 def _upload_photos(migrator: Migrator, photo_ids: list[str]) -> None:
@@ -233,8 +247,8 @@ def _upload_photos(migrator: Migrator, photo_ids: list[str]) -> None:
         photo = _load_photo_or_raise(migrator.store, photo_id)
         try:
             migrator.upload_photo(photo)
-        except RuntimeError as exc:
-            raise click.ClickException(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - isolate failures per photo
+            _record_step_error(migrator, photo, exc)
 
 
 def _delete_photos(migrator: Migrator, photo_ids: list[str]) -> int:
@@ -243,8 +257,11 @@ def _delete_photos(migrator: Migrator, photo_ids: list[str]) -> int:
         photo = _load_photo_or_raise(migrator.store, photo_id)
         if photo.status == MigrationStatus.DELETED_FROM_FLICKR:
             continue
-        migrator.delete_photo_from_flickr(photo)
-        deleted_count += 1
+        try:
+            migrator.delete_photo_from_flickr(photo)
+            deleted_count += 1
+        except Exception as exc:  # noqa: BLE001 - isolate failures per photo
+            _record_step_error(migrator, photo, exc)
     return deleted_count
 
 
@@ -359,12 +376,15 @@ def migrate(
         gphoto.authenticate()
     for selected_id in photo_ids:
         photo = _load_photo_or_raise(store, selected_id)
-        migrator.download_photo(photo)
-        migrator.annotate_photo(photo)
-        if not skip_upload:
-            migrator.upload_photo(photo)
-        if delete_from_flickr:
-            migrator.delete_photo_from_flickr(photo)
+        try:
+            migrator.download_photo(photo)
+            migrator.annotate_photo(photo)
+            if not skip_upload:
+                migrator.upload_photo(photo)
+            if delete_from_flickr:
+                migrator.delete_photo_from_flickr(photo)
+        except Exception as exc:  # noqa: BLE001 - isolate failures per photo
+            _record_step_error(migrator, photo, exc)
 
     click.echo("Migration complete.")
     if not no_summary:
