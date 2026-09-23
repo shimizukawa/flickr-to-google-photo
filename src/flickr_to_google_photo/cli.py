@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from time import monotonic
 
 import click
 
@@ -271,6 +272,19 @@ def fetch_metadata(ctx: click.Context, photo_id: str | None, flickr_album_ids: l
 
 
 @cli.command("migrate")
+@click.option(
+    "--status",
+    "target_status",
+    type=click.Choice([status.value for status in MigrationStatus]),
+    default=None,
+    help="Process only cached photos with this migration status.",
+)
+@click.option(
+    "--no-summary",
+    is_flag=True,
+    default=False,
+    help="Do not scan all local metadata to print the migration summary.",
+)
 @_delete_option
 @_photo_id_option
 @_album_id_option
@@ -279,6 +293,8 @@ def fetch_metadata(ctx: click.Context, photo_id: str | None, flickr_album_ids: l
 @click.pass_context
 def migrate(
     ctx: click.Context,
+    target_status: str | None,
+    no_summary: bool,
     delete_from_flickr: bool,
     photo_id: str | None,
     flickr_album_ids: list[str],
@@ -296,11 +312,44 @@ def migrate(
     )
     flickr.authenticate()
 
+    selection_started = monotonic()
+    if skip_fetch:
+        click.echo("Listing cached photos for migration...", err=True)
     photo_ids = _selected_photo_ids(
         migrator,
         photo_id=photo_id,
         fetch_metadata_first=not skip_fetch,
     )
+    if skip_fetch:
+        click.echo(
+            f"Listed {len(photo_ids)} cached photos in "
+            f"{monotonic() - selection_started:.1f}s.",
+            err=True,
+        )
+    if target_status is not None or (skip_fetch and photo_id is None):
+        excluded = {MigrationStatus.DELETED_FROM_FLICKR}
+        if not delete_from_flickr:
+            excluded.add(MigrationStatus.COMPLETED)
+        selected_status = MigrationStatus(target_status) if target_status else None
+        candidate_count = len(photo_ids)
+        selected_ids = []
+        for index, selected_id in enumerate(photo_ids, start=1):
+            photo = store.load(selected_id)
+            if photo is not None and (
+                photo.status == selected_status
+                if selected_status is not None
+                else photo.status not in excluded
+            ):
+                selected_ids.append(selected_id)
+            if index % 1000 == 0:
+                click.echo(
+                    f"Scanned {index}/{candidate_count} cached photos; "
+                    f"selected {len(selected_ids)} in "
+                    f"{monotonic() - selection_started:.1f}s.",
+                    err=True,
+                )
+        photo_ids = selected_ids
+    click.echo(f"Selected {len(photo_ids)} photos for migration.")
     _download_photos(migrator, photo_ids)
     _annotate_photos(migrator, photo_ids)
 
@@ -312,7 +361,8 @@ def migrate(
         _delete_photos(migrator, photo_ids)
 
     click.echo("Migration complete.")
-    _print_summary(store)
+    if not no_summary:
+        _print_summary(store)
 
 
 @cli.command("download")

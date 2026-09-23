@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from flickr_to_google_photo import cli as cli_module
+from flickr_to_google_photo.metadata import MigrationStatus
 
 
 @pytest.fixture
@@ -89,6 +90,60 @@ def test_migrate_rejects_old_option_names():
     assert "No such option: --skip-migrate" in skip_upload_result.output
     assert album_id_result.exit_code != 0
     assert "No such option: --flickr-album-id" in album_id_result.output
+
+
+def test_cached_migrate_only_processes_incomplete_photos(monkeypatch, cli_context):
+    photos = {
+        "downloaded": SimpleNamespace(status=MigrationStatus.DOWNLOADED),
+        "completed": SimpleNamespace(status=MigrationStatus.COMPLETED),
+        "deleted": SimpleNamespace(status=MigrationStatus.DELETED_FROM_FLICKR),
+    }
+    cli_context.migrator.cached_photo_ids.return_value = list(photos)
+    cli_context.store.load.side_effect = photos.get
+    processed = []
+    monkeypatch.setattr(cli_module, "_download_photos", lambda _m, ids: processed.extend(ids))
+    monkeypatch.setattr(cli_module, "_annotate_photos", lambda _m, _ids: None)
+    monkeypatch.setattr(cli_module, "_upload_photos", lambda _m, _ids: None)
+
+    result = CliRunner().invoke(cli_module.cli, ["migrate", "--skip-fetch"])
+
+    assert result.exit_code == 0
+    assert processed == ["downloaded"]
+
+
+def test_cached_migrate_can_select_downloaded_status(monkeypatch, cli_context):
+    photos = {
+        "downloaded": SimpleNamespace(status=MigrationStatus.DOWNLOADED),
+        "uploaded": SimpleNamespace(status=MigrationStatus.UPLOADED),
+    }
+    cli_context.migrator.cached_photo_ids.return_value = list(photos)
+    cli_context.store.load.side_effect = photos.get
+    processed = []
+    monkeypatch.setattr(cli_module, "_download_photos", lambda _m, ids: processed.extend(ids))
+    monkeypatch.setattr(cli_module, "_annotate_photos", lambda _m, _ids: None)
+    monkeypatch.setattr(cli_module, "_upload_photos", lambda _m, _ids: None)
+
+    result = CliRunner().invoke(
+        cli_module.cli, ["migrate", "--skip-fetch", "--status", "downloaded"]
+    )
+
+    assert result.exit_code == 0
+    assert processed == ["downloaded"]
+
+
+def test_cached_migrate_reports_selection_progress(monkeypatch, cli_context):
+    cli_context.migrator.cached_photo_ids.return_value = [str(i) for i in range(1001)]
+    cli_context.store.load.return_value = SimpleNamespace(status=MigrationStatus.DOWNLOADED)
+    monkeypatch.setattr(cli_module, "_download_photos", lambda _m, _ids: None)
+    monkeypatch.setattr(cli_module, "_annotate_photos", lambda _m, _ids: None)
+    monkeypatch.setattr(cli_module, "_upload_photos", lambda _m, _ids: None)
+
+    result = CliRunner().invoke(
+        cli_module.cli, ["migrate", "--skip-fetch", "--status", "downloaded"]
+    )
+
+    assert result.exit_code == 0
+    assert "Scanned 1000/1001 cached photos" in result.output
 
 
 def test_fetch_metadata_supports_photo_and_album_selection(monkeypatch, cli_context):
