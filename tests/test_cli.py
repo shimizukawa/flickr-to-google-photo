@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from click.testing import CliRunner
@@ -38,16 +38,10 @@ def cli_context(tmp_path, monkeypatch):
 def test_migrate_parses_new_option_names_and_dispatches_steps(monkeypatch, cli_context):
     photo_ids = ["111", "222"]
     selected_photo_ids = MagicMock(return_value=photo_ids)
-    download_photos = MagicMock()
-    annotate_photos = MagicMock()
-    upload_photos = MagicMock()
-    delete_photos = MagicMock()
+    photos = {photo_id: SimpleNamespace(status=MigrationStatus.DOWNLOADED) for photo_id in photo_ids}
+    cli_context.store.load.side_effect = photos.get
 
     monkeypatch.setattr(cli_module, "_selected_photo_ids", selected_photo_ids)
-    monkeypatch.setattr(cli_module, "_download_photos", download_photos)
-    monkeypatch.setattr(cli_module, "_annotate_photos", annotate_photos)
-    monkeypatch.setattr(cli_module, "_upload_photos", upload_photos)
-    monkeypatch.setattr(cli_module, "_delete_photos", delete_photos)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -71,10 +65,11 @@ def test_migrate_parses_new_option_names_and_dispatches_steps(monkeypatch, cli_c
         photo_id=None,
         fetch_metadata_first=False,
     )
-    download_photos.assert_called_once_with(cli_context.migrator, photo_ids)
-    annotate_photos.assert_called_once_with(cli_context.migrator, photo_ids)
-    upload_photos.assert_not_called()
-    delete_photos.assert_called_once_with(cli_context.migrator, photo_ids)
+    expected_calls = [call(photos[photo_id]) for photo_id in photo_ids]
+    assert cli_context.migrator.download_photo.call_args_list == expected_calls
+    assert cli_context.migrator.annotate_photo.call_args_list == expected_calls
+    cli_context.migrator.upload_photo.assert_not_called()
+    assert cli_context.migrator.delete_photo_from_flickr.call_args_list == expected_calls
 
 
 def test_migrate_rejects_old_option_names():
@@ -100,15 +95,10 @@ def test_cached_migrate_only_processes_incomplete_photos(monkeypatch, cli_contex
     }
     cli_context.migrator.cached_photo_ids.return_value = list(photos)
     cli_context.store.load.side_effect = photos.get
-    processed = []
-    monkeypatch.setattr(cli_module, "_download_photos", lambda _m, ids: processed.extend(ids))
-    monkeypatch.setattr(cli_module, "_annotate_photos", lambda _m, _ids: None)
-    monkeypatch.setattr(cli_module, "_upload_photos", lambda _m, _ids: None)
-
     result = CliRunner().invoke(cli_module.cli, ["migrate", "--skip-fetch"])
 
     assert result.exit_code == 0
-    assert processed == ["downloaded"]
+    cli_context.migrator.download_photo.assert_called_once_with(photos["downloaded"])
 
 
 def test_cached_migrate_can_select_downloaded_status(monkeypatch, cli_context):
@@ -118,17 +108,12 @@ def test_cached_migrate_can_select_downloaded_status(monkeypatch, cli_context):
     }
     cli_context.migrator.cached_photo_ids.return_value = list(photos)
     cli_context.store.load.side_effect = photos.get
-    processed = []
-    monkeypatch.setattr(cli_module, "_download_photos", lambda _m, ids: processed.extend(ids))
-    monkeypatch.setattr(cli_module, "_annotate_photos", lambda _m, _ids: None)
-    monkeypatch.setattr(cli_module, "_upload_photos", lambda _m, _ids: None)
-
     result = CliRunner().invoke(
         cli_module.cli, ["migrate", "--skip-fetch", "--status", "downloaded"]
     )
 
     assert result.exit_code == 0
-    assert processed == ["downloaded"]
+    cli_context.migrator.download_photo.assert_called_once_with(photos["downloaded"])
 
 
 def test_cached_migrate_reports_selection_progress(monkeypatch, cli_context):
@@ -144,6 +129,38 @@ def test_cached_migrate_reports_selection_progress(monkeypatch, cli_context):
 
     assert result.exit_code == 0
     assert "Scanned 1000/1001 cached photos" in result.output
+
+
+def test_migrate_finishes_each_photo_before_starting_next(monkeypatch, cli_context):
+    photos = {
+        "111": SimpleNamespace(status=MigrationStatus.DOWNLOADED),
+        "222": SimpleNamespace(status=MigrationStatus.DOWNLOADED),
+    }
+    cli_context.migrator.cached_photo_ids.return_value = list(photos)
+    cli_context.store.load.side_effect = photos.get
+    cli_context.migrator.store.load.side_effect = photos.get
+    steps = []
+    cli_context.migrator.download_photo.side_effect = (
+        lambda photo: steps.append(("download", photo))
+    )
+    cli_context.migrator.annotate_photo.side_effect = (
+        lambda photo: steps.append(("annotate", photo))
+    )
+    cli_context.migrator.upload_photo.side_effect = (
+        lambda photo: steps.append(("upload", photo))
+    )
+
+    result = CliRunner().invoke(cli_module.cli, ["migrate", "--skip-fetch"])
+
+    assert result.exit_code == 0
+    assert steps == [
+        ("download", photos["111"]),
+        ("annotate", photos["111"]),
+        ("upload", photos["111"]),
+        ("download", photos["222"]),
+        ("annotate", photos["222"]),
+        ("upload", photos["222"]),
+    ]
 
 
 def test_fetch_metadata_supports_photo_and_album_selection(monkeypatch, cli_context):
@@ -209,3 +226,33 @@ def test_split_commands_dispatch_expected_helpers(
         fetch_metadata_first="--fetch-metadata" in args,
     )
     helper.assert_called_once_with(cli_context.migrator, ["111"])
+
+
+def test_delete_photos_skips_photos_already_deleted_from_flickr():
+    deleted = SimpleNamespace(status=MigrationStatus.DELETED_FROM_FLICKR)
+    pending = SimpleNamespace(status=MigrationStatus.COMPLETED)
+    migrator = MagicMock()
+    migrator.store.load.side_effect = [deleted, pending]
+
+    cli_module._delete_photos(migrator, ["deleted", "pending"])
+
+    migrator.delete_photo_from_flickr.assert_called_once_with(pending)
+
+
+def test_delete_no_summary_avoids_full_metadata_scan(monkeypatch, cli_context):
+    selected_photo_ids = MagicMock(return_value=["111"])
+    delete_photos = MagicMock()
+    print_summary = MagicMock()
+
+    monkeypatch.setattr(cli_module, "_selected_photo_ids", selected_photo_ids)
+    monkeypatch.setattr(cli_module, "_delete_photos", delete_photos)
+    monkeypatch.setattr(cli_module, "_print_summary", print_summary)
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        ["delete", "--photo-id", "111", "--no-summary"],
+    )
+
+    assert result.exit_code == 0
+    delete_photos.assert_called_once_with(cli_context.migrator, ["111"])
+    print_summary.assert_not_called()

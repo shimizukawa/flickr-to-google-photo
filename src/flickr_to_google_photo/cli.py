@@ -237,10 +237,15 @@ def _upload_photos(migrator: Migrator, photo_ids: list[str]) -> None:
             raise click.ClickException(str(exc)) from exc
 
 
-def _delete_photos(migrator: Migrator, photo_ids: list[str]) -> None:
+def _delete_photos(migrator: Migrator, photo_ids: list[str]) -> int:
+    deleted_count = 0
     for photo_id in photo_ids:
         photo = _load_photo_or_raise(migrator.store, photo_id)
+        if photo.status == MigrationStatus.DELETED_FROM_FLICKR:
+            continue
         migrator.delete_photo_from_flickr(photo)
+        deleted_count += 1
+    return deleted_count
 
 
 # ------------------------------------------------------------------
@@ -350,15 +355,16 @@ def migrate(
                 )
         photo_ids = selected_ids
     click.echo(f"Selected {len(photo_ids)} photos for migration.")
-    _download_photos(migrator, photo_ids)
-    _annotate_photos(migrator, photo_ids)
-
     if not skip_upload:
         gphoto.authenticate()
-        _upload_photos(migrator, photo_ids)
-
-    if delete_from_flickr:
-        _delete_photos(migrator, photo_ids)
+    for selected_id in photo_ids:
+        photo = _load_photo_or_raise(store, selected_id)
+        migrator.download_photo(photo)
+        migrator.annotate_photo(photo)
+        if not skip_upload:
+            migrator.upload_photo(photo)
+        if delete_from_flickr:
+            migrator.delete_photo_from_flickr(photo)
 
     click.echo("Migration complete.")
     if not no_summary:
@@ -456,12 +462,19 @@ def upload(
 
 
 @cli.command("delete")
+@click.option(
+    "--no-summary",
+    is_flag=True,
+    default=False,
+    help="Do not scan all local metadata to print the migration summary.",
+)
 @_fetch_metadata_option
 @_album_id_option
 @_photo_id_option
 @click.pass_context
 def delete(
     ctx: click.Context,
+    no_summary: bool,
     fetch_metadata_first: bool,
     photo_id: str | None,
     flickr_album_ids: list[str],
@@ -480,9 +493,10 @@ def delete(
         photo_id=photo_id,
         fetch_metadata_first=fetch_metadata_first,
     )
-    _delete_photos(migrator, photo_ids)
-    click.echo(f"Deleted {len(photo_ids)} photos from Flickr.")
-    _print_summary(store)
+    deleted_count = _delete_photos(migrator, photo_ids)
+    click.echo(f"Deleted {deleted_count} photos from Flickr.")
+    if not no_summary:
+        _print_summary(store)
 
 
 @cli.command("organize-local")
